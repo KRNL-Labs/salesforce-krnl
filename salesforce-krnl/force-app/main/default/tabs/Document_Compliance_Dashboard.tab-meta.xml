@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomTab xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>KRNL Document Compliance Dashboard Tab</description>
+    <flexiPage>KRNL_Dashboard</flexiPage>
+    <label>Document Compliance</label>
+    <motif>Custom18: Airplane</motif>
+</CustomTab>

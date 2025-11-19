@@ -1,0 +1,374 @@
+{
+  "chain_id": 11155111,
+  "sender": "{{ENV.SENDER_ADDRESS}}",
+  "delegate": "{{TRANSACTION_INTENT_DELEGATE}}",
+  "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+  "target": {
+    "contract": "{{ENV.DOCUMENT_REGISTRY_CONTRACT}}",
+    "function": "logDocumentAccess(string,string,string,string,string)",
+    "authData_result": "${prepare-access-log.result}",
+    "parameters": []
+  },
+  "sponsor_execution_fee": true,
+  "value": "0",
+  "intent": {
+    "id": "{{TRANSACTION_INTENT_ID}}",
+    "signature": "{{USER_SIGNATURE}}",
+    "deadline": "{{TRANSACTION_INTENT_DEADLINE}}"
+  },
+  "rpc_url": "${_SECRETS.rpcSepoliaURL}",
+  "bundler_url": "https://api.pimlico.io/v2/sepolia/rpc?apikey=${_SECRETS.pimlico-apikey}",
+  "paymaster_url": "https://api.pimlico.io/v2/sepolia/rpc?apikey=${_SECRETS.pimlico-apikey}",
+  "gas_limit": "150000",
+  "max_fee_per_gas": "20000000000",
+  "max_priority_fee_per_gas": "2000000000",
+
+  "workflow": {
+    "name": "salesforce-document-access-logging",
+    "version": "v1.0.0",
+    "steps": [
+      {
+        "name": "validate-document-exists",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "get-user-info",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/sobjects/ContentDocument/{{DOCUMENT_ID}}",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "documentExists",
+            "value": "response.status === 200",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "documentHash",
+            "value": "{{DOCUMENT_HASH}}",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "get-user-info",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "capture-access-context",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/sobjects/User/{{USER_ID}}?fields=Id,Name,Email,Username",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "userId",
+            "value": "response.body.Id",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "userName",
+            "value": "response.body.Name",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "userEmail",
+            "value": "response.body.Email",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "username",
+            "value": "response.body.Username",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "capture-access-context",
+        "image": "ghcr.io/krnl-labs/executor-context@sha256:e3f4a5b6c7d8901234567890123456789012ghij",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "validate-access-permissions",
+        "inputs": {
+          "accessType": "{{ACCESS_TYPE}}",
+          "timestamp": "{{CURRENT_TIMESTAMP}}",
+          "sessionInfo": {
+            "ipAddress": "{{CLIENT_IP}}",
+            "userAgent": "{{USER_AGENT}}",
+            "sessionId": "{{SESSION_ID}}",
+            "orgId": "{{SALESFORCE_ORG_ID}}"
+          },
+          "deviceInfo": {
+            "deviceId": "{{DEVICE_ID}}",
+            "deviceType": "{{DEVICE_TYPE}}",
+            "browserInfo": "{{BROWSER_INFO}}"
+          }
+        },
+        "outputs": [
+          {
+            "name": "accessContext",
+            "value": "result.context",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "accessTimestamp",
+            "value": "result.timestamp",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "validate-access-permissions",
+        "image": "ghcr.io/krnl-labs/executor-permission@sha256:f4a5b6c7d8e9012345678901234567890123hijk",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "check-compliance-rules",
+        "inputs": {
+          "userId": "${get-user-info.userId}",
+          "documentId": "{{DOCUMENT_ID}}",
+          "accessType": "{{ACCESS_TYPE}}",
+          "permissionRules": {
+            "checkOwnership": true,
+            "checkSharing": true,
+            "checkFieldLevelSecurity": true,
+            "checkObjectPermissions": true
+          }
+        },
+        "outputs": [
+          {
+            "name": "hasPermission",
+            "value": "result.hasPermission",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "permissionLevel",
+            "value": "result.permissionLevel",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "permissionSource",
+            "value": "result.permissionSource",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "check-compliance-rules",
+        "image": "ghcr.io/krnl-labs/executor-compliance@sha256:c1d2e3f4a5b6789012345678901234567890efgh",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "prepare-access-log",
+        "inputs": {
+          "documentHash": "${validate-document-exists.documentHash}",
+          "accessType": "{{ACCESS_TYPE}}",
+          "userId": "${get-user-info.userId}",
+          "accessContext": "${capture-access-context.accessContext}",
+          "complianceChecks": {
+            "dataRetention": true,
+            "accessLogging": true,
+            "auditTrail": true,
+            "dataClassification": "{{DOCUMENT_CLASSIFICATION}}",
+            "regulatoryCompliance": ["SOX", "GDPR", "HIPAA"]
+          }
+        },
+        "outputs": [
+          {
+            "name": "complianceStatus",
+            "value": "result.status",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "requiredActions",
+            "value": "result.requiredActions",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "complianceScore",
+            "value": "result.score",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "prepare-access-log",
+        "image": "ghcr.io/krnl-labs/executor-encoder-evm@sha256:b28823d12eb1b16cbcc34c751302cd2dbe7e35480a5bc20e4e7ad50a059b6611",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "log-to-blockchain",
+        "config": {
+          "parameters": [
+            {
+              "name": "documentHash",
+              "type": "string"
+            },
+            {
+              "name": "salesforceUserId",
+              "type": "string"
+            },
+            {
+              "name": "accessType",
+              "type": "string"
+            },
+            {
+              "name": "ipAddress",
+              "type": "string"
+            },
+            {
+              "name": "userAgent",
+              "type": "string"
+            }
+          ]
+        },
+        "inputs": {
+          "documentHash": "${validate-document-exists.documentHash}",
+          "salesforceUserId": "${get-user-info.userId}",
+          "accessType": "{{ACCESS_TYPE}}",
+          "ipAddress": "{{CLIENT_IP}}",
+          "userAgent": "{{USER_AGENT}}"
+        },
+        "outputs": [
+          {
+            "name": "result",
+            "value": "encoded_data",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "log-to-blockchain",
+        "image": "ghcr.io/krnl-labs/executor-blockchain@sha256:d2e3f4a5b6c7890123456789012345678901fghi",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "create-salesforce-access-log",
+        "inputs": {
+          "documentHash": "${validate-document-exists.documentHash}",
+          "salesforceUserId": "${get-user-info.userId}",
+          "accessType": "{{ACCESS_TYPE}}",
+          "ipAddress": "{{CLIENT_IP}}",
+          "userAgent": "{{USER_AGENT}}",
+          "accessContext": "${capture-access-context.accessContext}",
+          "complianceData": {
+            "status": "${check-compliance-rules.complianceStatus}",
+            "score": "${check-compliance-rules.complianceScore}",
+            "permissionLevel": "${validate-access-permissions.permissionLevel}"
+          }
+        },
+        "outputs": [
+          {
+            "name": "transactionHash",
+            "value": "result.transactionHash",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "blockNumber",
+            "value": "result.blockNumber",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "gasUsed",
+            "value": "result.gasUsed",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "create-salesforce-access-log",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "send-compliance-notification",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/sobjects/Document_Access_Log__c",
+          "method": "POST",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "Document_ID__c": "{{DOCUMENT_ID}}",
+            "Document_Hash__c": "${validate-document-exists.documentHash}",
+            "Access_Type__c": "{{ACCESS_TYPE}}",
+            "User_ID__c": "${get-user-info.userId}",
+            "Access_Timestamp__c": "${capture-access-context.accessTimestamp}",
+            "IP_Address__c": "{{CLIENT_IP}}",
+            "User_Agent__c": "{{USER_AGENT}}",
+            "Status__c": "Logged to Blockchain",
+            "Blockchain_Response__c": "${log-to-blockchain.transactionHash}",
+            "Compliance_Score__c": "${check-compliance-rules.complianceScore}",
+            "Permission_Level__c": "${validate-access-permissions.permissionLevel}"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "salesforceLogId",
+            "value": "response.body.id",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "success",
+            "value": "response.body.success",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "send-compliance-notification",
+        "image": "ghcr.io/krnl-labs/executor-notification@sha256:g5a6b7c8d9e0123456789012345678901234ijkl",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "condition": "${check-compliance-rules.complianceScore} < 80",
+        "inputs": {
+          "notificationType": "compliance_alert",
+          "severity": "medium",
+          "recipients": ["{{COMPLIANCE_TEAM_EMAIL}}", "{{DOCUMENT_OWNER_EMAIL}}"],
+          "message": {
+            "subject": "Document Access Compliance Alert",
+            "body": "Document access by ${get-user-info.userName} has triggered a compliance alert. Score: ${check-compliance-rules.complianceScore}/100",
+            "documentId": "{{DOCUMENT_ID}}",
+            "userId": "${get-user-info.userId}",
+            "accessType": "{{ACCESS_TYPE}}",
+            "timestamp": "${capture-access-context.accessTimestamp}",
+            "blockchainTx": "${log-to-blockchain.transactionHash}"
+          },
+          "channels": ["email", "salesforce_notification"]
+        },
+        "outputs": [
+          {
+            "name": "notificationSent",
+            "value": "result.sent",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "notificationId",
+            "value": "result.id",
+            "required": false,
+            "export": true
+          }
+        ]
+      }
+    ]
+  }
+}

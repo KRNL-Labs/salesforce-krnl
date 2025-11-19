@@ -1,0 +1,205 @@
+{
+  "chain_id": 11155111,
+  "sender": "{{ENV.SENDER_ADDRESS}}",
+  "delegate": "{{TRANSACTION_INTENT_DELEGATE}}",
+  "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+  "target": {
+    "contract": "{{ENV.DOCUMENT_REGISTRY_CONTRACT}}",
+    "function": "registerDocument(string,string,string)",
+    "authData_result": "${call-compliance-server.result}",
+    "parameters": []
+  },
+  "sponsor_execution_fee": true,
+  "value": "0",
+  "intent": {
+    "id": "{{TRANSACTION_INTENT_ID}}",
+    "signature": "{{USER_SIGNATURE}}",
+    "deadline": "{{TRANSACTION_INTENT_DEADLINE}}"
+  },
+  "rpc_url": "${_SECRETS.rpcSepoliaURL}",
+  "bundler_url": "https://api.pimlico.io/v2/sepolia/rpc?apikey=${_SECRETS.pimlico-apikey}",
+  "paymaster_url": "https://api.pimlico.io/v2/sepolia/rpc?apikey=${_SECRETS.pimlico-apikey}",
+  "gas_limit": "200000",
+  "max_fee_per_gas": "20000000000",
+  "max_priority_fee_per_gas": "2000000000",
+
+  "workflow": {
+    "name": "salesforce-compliance-check-simple",
+    "version": "v1.0.0",
+    "steps": [
+      {
+        "name": "fetch-salesforce-document",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "generate-document-hash",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/sobjects/ContentDocument/{{DOCUMENT_ID}}",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "documentMetadata",
+            "value": "response.body",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "fetch-document-content",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "generate-document-hash",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/query?q=SELECT+VersionData+FROM+ContentVersion+WHERE+ContentDocumentId='{{DOCUMENT_ID}}'+AND+IsLatest=true+LIMIT+1",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 60
+        },
+        "outputs": [
+          {
+            "name": "versionData",
+            "value": "response.body.records[0].VersionData",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "generate-document-hash",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "call-compliance-server",
+        "inputs": {
+          "url": "{{COMPLIANCE_SERVER_URL}}/api/document/hash",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "content": "${fetch-document-content.versionData}",
+            "metadata": {
+              "title": "${fetch-salesforce-document.documentMetadata.Title}",
+              "fileType": "${fetch-salesforce-document.documentMetadata.FileType}",
+              "contentSize": "${fetch-salesforce-document.documentMetadata.ContentSize}",
+              "salesforceId": "{{DOCUMENT_ID}}"
+            }
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "documentHash",
+            "value": "response.body.documentHash",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "call-compliance-server",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "register-on-blockchain",
+        "inputs": {
+          "url": "{{COMPLIANCE_SERVER_URL}}/api/compliance/check",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "documentHash": "${generate-document-hash.documentHash}",
+            "documentMetadata": {
+              "title": "${fetch-salesforce-document.documentMetadata.Title}",
+              "fileType": "${fetch-salesforce-document.documentMetadata.FileType}",
+              "contentSize": "${fetch-salesforce-document.documentMetadata.ContentSize}",
+              "createdDate": "${fetch-salesforce-document.documentMetadata.CreatedDate}",
+              "salesforceId": "{{DOCUMENT_ID}}"
+            },
+            "complianceRules": {
+              "maxFileSize": 50000000,
+              "allowedFileTypes": ["pdf", "doc", "docx", "txt", "xls", "xlsx"],
+              "requiredFields": ["title", "fileType"]
+            }
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "complianceResult",
+            "value": "response.body.result",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "register-on-blockchain",
+        "image": "ghcr.io/krnl-labs/executor-blockchain@sha256:d2e3f4a5b6c7890123456789012345678901fghi",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "notify-salesforce",
+        "inputs": {
+          "documentHash": "${generate-document-hash.documentHash}",
+          "salesforceRecordId": "{{DOCUMENT_ID}}",
+          "metadata": {
+            "title": "${fetch-salesforce-document.documentMetadata.Title}",
+            "complianceStatus": "${call-compliance-server.complianceResult.complianceStatus}",
+            "riskScore": "${call-compliance-server.complianceResult.riskScore}",
+            "timestamp": "${call-compliance-server.complianceResult.timestamp}"
+          }
+        },
+        "outputs": [
+          {
+            "name": "transactionHash",
+            "value": "result.transactionHash",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "blockchainStatus",
+            "value": "result.status",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "notify-salesforce",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "inputs": {
+          "url": "{{COMPLIANCE_SERVER_URL}}/callback/salesforce",
+          "method": "POST",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "workflowType": "compliance_check",
+            "documentId": "{{DOCUMENT_ID}}",
+            "documentHash": "${generate-document-hash.documentHash}",
+            "complianceResult": "${call-compliance-server.complianceResult}",
+            "blockchainTxHash": "${register-on-blockchain.transactionHash}",
+            "timestamp": "{{CURRENT_TIMESTAMP}}"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "notificationSent",
+            "value": "response.body.success",
+            "required": true,
+            "export": true
+          }
+        ]
+      }
+    ]
+  }
+}

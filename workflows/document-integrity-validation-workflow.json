@@ -1,0 +1,448 @@
+{
+  "chain_id": 11155111,
+  "sender": "{{ENV.SENDER_ADDRESS}}",
+  "delegate": "{{TRANSACTION_INTENT_DELEGATE}}",
+  "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+  "target": {
+    "contract": "{{ENV.DOCUMENT_REGISTRY_CONTRACT}}",
+    "function": "getDocument(string)",
+    "authData_result": "${validate-document-integrity.result}",
+    "parameters": []
+  },
+  "sponsor_execution_fee": false,
+  "value": "0",
+  "intent": {
+    "id": "{{TRANSACTION_INTENT_ID}}",
+    "signature": "{{USER_SIGNATURE}}",
+    "deadline": "{{TRANSACTION_INTENT_DEADLINE}}"
+  },
+  "rpc_url": "${_SECRETS.rpcSepoliaURL}",
+  "gas_limit": "100000",
+  "max_fee_per_gas": "20000000000",
+  "max_priority_fee_per_gas": "2000000000",
+
+  "workflow": {
+    "name": "salesforce-document-integrity-validation",
+    "version": "v1.0.0",
+    "steps": [
+      {
+        "name": "fetch-current-document",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "get-current-version-data",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/sobjects/ContentDocument/{{DOCUMENT_ID}}",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "documentId",
+            "value": "response.body.Id",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "title",
+            "value": "response.body.Title",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "lastModifiedDate",
+            "value": "response.body.LastModifiedDate",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "contentSize",
+            "value": "response.body.ContentSize",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "get-current-version-data",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "generate-current-hash",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/query?q=SELECT+VersionData+FROM+ContentVersion+WHERE+ContentDocumentId='{{DOCUMENT_ID}}'+AND+IsLatest=true+LIMIT+1",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 60
+        },
+        "outputs": [
+          {
+            "name": "currentVersionData",
+            "value": "response.body.records[0].VersionData",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "generate-current-hash",
+        "image": "ghcr.io/krnl-labs/executor-crypto@sha256:a1b2c3d4e5f6789012345678901234567890abcd",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "fetch-blockchain-record",
+        "inputs": {
+          "algorithm": "sha256",
+          "input": "${get-current-version-data.currentVersionData}",
+          "metadata": {
+            "title": "${fetch-current-document.title}",
+            "contentSize": "${fetch-current-document.contentSize}",
+            "lastModifiedDate": "${fetch-current-document.lastModifiedDate}",
+            "salesforceId": "${fetch-current-document.documentId}"
+          },
+          "format": "hex"
+        },
+        "outputs": [
+          {
+            "name": "currentDocumentHash",
+            "value": "result.hash",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "currentHashWithMetadata",
+            "value": "result.hashWithMetadata",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "fetch-blockchain-record",
+        "image": "ghcr.io/krnl-labs/executor-blockchain@sha256:d2e3f4a5b6c7890123456789012345678901fghi",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "fetch-salesforce-blockchain-record",
+        "inputs": {
+          "method": "getDocument",
+          "contractAddress": "{{ENV.DOCUMENT_REGISTRY_CONTRACT}}",
+          "parameters": ["${generate-current-hash.currentDocumentHash}"],
+          "returnFields": ["documentHash", "salesforceRecordId", "registeredBy", "registrationTimestamp", "isActive", "metadata"]
+        },
+        "outputs": [
+          {
+            "name": "blockchainDocumentHash",
+            "value": "result.documentHash",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "blockchainSalesforceId",
+            "value": "result.salesforceRecordId",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "blockchainTimestamp",
+            "value": "result.registrationTimestamp",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "blockchainIsActive",
+            "value": "result.isActive",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "blockchainMetadata",
+            "value": "result.metadata",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "fetch-salesforce-blockchain-record",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "compare-hashes",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/query?q=SELECT+Document_Hash__c,Blockchain_Status__c,Registration_Timestamp__c,Metadata__c+FROM+Blockchain_Document__c+WHERE+Document_ID__c='{{DOCUMENT_ID}}'+AND+Blockchain_Status__c='Registered'+ORDER+BY+CreatedDate+DESC+LIMIT+1",
+          "method": "GET",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Accept": "application/json"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "salesforceStoredHash",
+            "value": "response.body.records[0].Document_Hash__c",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "salesforceBlockchainStatus",
+            "value": "response.body.records[0].Blockchain_Status__c",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "salesforceRegistrationTime",
+            "value": "response.body.records[0].Registration_Timestamp__c",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "salesforceMetadata",
+            "value": "response.body.records[0].Metadata__c",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "compare-hashes",
+        "image": "ghcr.io/krnl-labs/executor-validator@sha256:h6b7c8d9e0f1234567890123456789012345jklm",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "validate-document-integrity",
+        "inputs": {
+          "currentHash": "${generate-current-hash.currentDocumentHash}",
+          "blockchainHash": "${fetch-blockchain-record.blockchainDocumentHash}",
+          "salesforceHash": "${fetch-salesforce-blockchain-record.salesforceStoredHash}",
+          "validationRules": {
+            "exactMatch": true,
+            "caseInsensitive": false,
+            "allowPartialMatch": false
+          },
+          "additionalChecks": {
+            "timestampValidation": true,
+            "metadataConsistency": true,
+            "statusValidation": true
+          }
+        },
+        "outputs": [
+          {
+            "name": "hashesMatch",
+            "value": "result.hashesMatch",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "validationResults",
+            "value": "result.validationResults",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "discrepancies",
+            "value": "result.discrepancies",
+            "required": false,
+            "export": true
+          },
+          {
+            "name": "confidenceScore",
+            "value": "result.confidenceScore",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "validate-document-integrity",
+        "image": "ghcr.io/krnl-labs/executor-integrity@sha256:i7c8d9e0f1a2345678901234567890123456klmn",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "generate-validation-report",
+        "inputs": {
+          "documentId": "{{DOCUMENT_ID}}",
+          "currentHash": "${generate-current-hash.currentDocumentHash}",
+          "storedHash": "${fetch-blockchain-record.blockchainDocumentHash}",
+          "hashComparison": "${compare-hashes.validationResults}",
+          "integrityChecks": {
+            "tamperDetection": true,
+            "timestampVerification": true,
+            "metadataValidation": true,
+            "chainOfCustody": true
+          },
+          "riskAssessment": {
+            "calculateRiskScore": true,
+            "identifyAnomalies": true,
+            "checkAccessPatterns": true
+          }
+        },
+        "outputs": [
+          {
+            "name": "integrityStatus",
+            "value": "result.status",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "integrityScore",
+            "value": "result.score",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "riskLevel",
+            "value": "result.riskLevel",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "anomalies",
+            "value": "result.anomalies",
+            "required": false,
+            "export": true
+          },
+          {
+            "name": "recommendation",
+            "value": "result.recommendation",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "generate-validation-report",
+        "image": "ghcr.io/krnl-labs/executor-report@sha256:j8d9e0f1a2b3456789012345678901234567lmno",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "update-validation-record",
+        "inputs": {
+          "reportType": "integrity_validation",
+          "documentInfo": {
+            "id": "{{DOCUMENT_ID}}",
+            "title": "${fetch-current-document.title}",
+            "size": "${fetch-current-document.contentSize}",
+            "lastModified": "${fetch-current-document.lastModifiedDate}"
+          },
+          "validationResults": {
+            "hashesMatch": "${compare-hashes.hashesMatch}",
+            "integrityStatus": "${validate-document-integrity.integrityStatus}",
+            "integrityScore": "${validate-document-integrity.integrityScore}",
+            "riskLevel": "${validate-document-integrity.riskLevel}",
+            "confidenceScore": "${compare-hashes.confidenceScore}"
+          },
+          "hashComparison": {
+            "currentHash": "${generate-current-hash.currentDocumentHash}",
+            "blockchainHash": "${fetch-blockchain-record.blockchainDocumentHash}",
+            "salesforceHash": "${fetch-salesforce-blockchain-record.salesforceStoredHash}"
+          },
+          "timestamps": {
+            "validationTime": "{{CURRENT_TIMESTAMP}}",
+            "blockchainRegistration": "${fetch-blockchain-record.blockchainTimestamp}",
+            "salesforceRegistration": "${fetch-salesforce-blockchain-record.salesforceRegistrationTime}"
+          },
+          "anomalies": "${validate-document-integrity.anomalies}",
+          "recommendation": "${validate-document-integrity.recommendation}"
+        },
+        "outputs": [
+          {
+            "name": "validationReport",
+            "value": "result.report",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "reportId",
+            "value": "result.id",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "reportHash",
+            "value": "result.hash",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "update-validation-record",
+        "image": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "next": "send-integrity-alert",
+        "inputs": {
+          "url": "{{SALESFORCE_INSTANCE_URL}}/services/data/v59.0/sobjects/Document_Validation__c",
+          "method": "POST",
+          "headers": {
+            "Authorization": "Bearer {{SALESFORCE_ACCESS_TOKEN}}",
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "Document_ID__c": "{{DOCUMENT_ID}}",
+            "Validation_Type__c": "Integrity Check",
+            "Validation_Status__c": "${validate-document-integrity.integrityStatus}",
+            "Integrity_Score__c": "${validate-document-integrity.integrityScore}",
+            "Risk_Level__c": "${validate-document-integrity.riskLevel}",
+            "Hashes_Match__c": "${compare-hashes.hashesMatch}",
+            "Confidence_Score__c": "${compare-hashes.confidenceScore}",
+            "Validation_Timestamp__c": "{{CURRENT_TIMESTAMP}}",
+            "Current_Hash__c": "${generate-current-hash.currentDocumentHash}",
+            "Blockchain_Hash__c": "${fetch-blockchain-record.blockchainDocumentHash}",
+            "Validation_Report__c": "${generate-validation-report.validationReport}",
+            "Report_Hash__c": "${generate-validation-report.reportHash}",
+            "Anomalies__c": "${validate-document-integrity.anomalies}",
+            "Recommendation__c": "${validate-document-integrity.recommendation}"
+          },
+          "timeout": 30
+        },
+        "outputs": [
+          {
+            "name": "validationRecordId",
+            "value": "response.body.id",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "success",
+            "value": "response.body.success",
+            "required": true,
+            "export": true
+          }
+        ]
+      },
+      {
+        "name": "send-integrity-alert",
+        "image": "ghcr.io/krnl-labs/executor-notification@sha256:g5a6b7c8d9e0123456789012345678901234ijkl",
+        "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
+        "condition": "${compare-hashes.hashesMatch} === false OR ${validate-document-integrity.riskLevel} === 'HIGH'",
+        "inputs": {
+          "notificationType": "integrity_alert",
+          "severity": "${validate-document-integrity.riskLevel}",
+          "recipients": ["{{SECURITY_TEAM_EMAIL}}", "{{COMPLIANCE_TEAM_EMAIL}}", "{{DOCUMENT_OWNER_EMAIL}}"],
+          "message": {
+            "subject": "Document Integrity Alert - Potential Tampering Detected",
+            "body": "Document integrity validation for ${fetch-current-document.title} has failed. Hashes do not match: ${compare-hashes.hashesMatch}. Risk Level: ${validate-document-integrity.riskLevel}",
+            "documentId": "{{DOCUMENT_ID}}",
+            "integrityStatus": "${validate-document-integrity.integrityStatus}",
+            "integrityScore": "${validate-document-integrity.integrityScore}",
+            "validationTime": "{{CURRENT_TIMESTAMP}}",
+            "validationRecordId": "${update-validation-record.validationRecordId}",
+            "recommendation": "${validate-document-integrity.recommendation}"
+          },
+          "channels": ["email", "salesforce_notification", "slack"],
+          "priority": "high"
+        },
+        "outputs": [
+          {
+            "name": "alertSent",
+            "value": "result.sent",
+            "required": true,
+            "export": true
+          },
+          {
+            "name": "alertId",
+            "value": "result.id",
+            "required": false,
+            "export": true
+          }
+        ]
+      }
+    ]
+  }
+}

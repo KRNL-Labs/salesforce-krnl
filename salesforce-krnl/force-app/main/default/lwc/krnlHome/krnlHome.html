@@ -1,0 +1,98 @@
+<template>
+    <lightning-card title="KRNL Document Compliance Home" icon-name="custom:custom63">
+        <div class="slds-card__body slds-card__body_inner">
+
+            <div class="slds-text-body_regular slds-m-bottom_medium">
+                Welcome to the KRNL-backed document compliance app. This home page
+                provides a quick overview of tracked documents, blockchain coverage,
+                and recent access activity.
+            </div>
+
+            <!-- KPIs -->
+            <div class="slds-grid slds-wrap slds-gutters">
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                    <article class="slds-tile slds-media slds-m-bottom_small">
+                        <div class="slds-media__figure">
+                            <lightning-icon icon-name="custom:custom63" size="medium"></lightning-icon>
+                        </div>
+                        <div class="slds-media__body">
+                            <h3 class="slds-tile__title slds-truncate">Tracked Documents</h3>
+                            <div class="slds-tile__detail">
+                                <p class="slds-text-heading_large">{totalDocuments}</p>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                    <article class="slds-tile slds-media slds-m-bottom_small">
+                        <div class="slds-media__figure">
+                            <lightning-icon icon-name="custom:custom78" size="medium"></lightning-icon>
+                        </div>
+                        <div class="slds-media__body">
+                            <h3 class="slds-tile__title slds-truncate">Blockchain Registered</h3>
+                            <div class="slds-tile__detail">
+                                <p class="slds-text-heading_large">{blockchainRegistered}</p>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+                <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                    <article class="slds-tile slds-media slds-m-bottom_small">
+                        <div class="slds-media__figure">
+                            <lightning-icon icon-name="custom:custom85" size="medium"></lightning-icon>
+                        </div>
+                        <div class="slds-media__body">
+                            <h3 class="slds-tile__title slds-truncate">Total Access Events</h3>
+                            <div class="slds-tile__detail">
+                                <p class="slds-text-heading_large">{totalAccessEvents}</p>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </div>
+
+            <!-- Coverage -->
+            <div class="slds-m-top_medium">
+                <p class="slds-text-title_caps slds-m-bottom_x-small">Blockchain Coverage</p>
+                <lightning-progress-bar value={complianceCoverage} size="large" variant="success"></lightning-progress-bar>
+                <p class="slds-text-body_small slds-m-top_x-small">
+                    {blockchainRegistered} of {totalDocuments} documents registered on-chain
+                    ({complianceCoverage}%).
+                </p>
+            </div>
+
+            <!-- Recent activity -->
+            <div class="slds-m-top_large">
+                <h3 class="slds-text-heading_small slds-m-bottom_small">Recent Access Activity</h3>
+                <template if:true={hasRecentAccess}>
+                    <lightning-datatable
+                        key-field="id"
+                        data={recentAccessLogs}
+                        columns={accessLogColumns}
+                        hide-checkbox-column
+                        show-row-number-column
+                    ></lightning-datatable>
+                </template>
+                <template if:false={hasRecentAccess}>
+                    <div class="slds-text-align_center slds-p-around_medium">
+                        <lightning-icon icon-name="custom:custom85" size="large" alternative-text="No data"></lightning-icon>
+                        <p class="slds-text-heading_small slds-m-top_small">No access events yet</p>
+                        <p class="slds-text-color_weak">
+                            Once users start viewing documents via KRNL, you'll see activity here.
+                        </p>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Getting started -->
+            <div class="slds-m-top_large">
+                <h3 class="slds-text-heading_small slds-m-bottom_small">Getting Started</h3>
+                <ol class="slds-list_ordered slds-m-left_large slds-text-body_small">
+                    <li>Place the Document Access Tracker component on key record pages.</li>
+                    <li>Configure the backend URL and KRNL settings via custom metadata (planned).</li>
+                    <li>Use the Document Compliance tab to run checks and log access.</li>
+                </ol>
+            </div>
+        </div>
+    </lightning-card>
+</template>

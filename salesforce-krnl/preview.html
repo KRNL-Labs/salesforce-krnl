@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KRNL Document Access & Compliance Tracker - Preview</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@salesforce-ux/design-system@latest/assets/styles/salesforce-lightning-design-system.min.css">
+    <style>
+        body {
+            font-family: "Salesforce Sans", Arial, sans-serif;
+            background: #f3f3f3;
+            padding: 20px;
+        }
+        .preview-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .mock-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #004c9c;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 4px;
+            display: none;
+            z-index: 1000;
+        }
+        .mock-toast.success { background: #2e844a; }
+        .mock-toast.error { background: #c23934; }
+        .mock-toast.warning { background: #fe9339; }
+        .mock-toast.info { background: #0176d3; }
+        .processing-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.3);
+            z-index: 999;
+        }
+        .processing-spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .mock-lightning-card {
+            border: 1px solid #d8dde6;
+            border-radius: 0.25rem;
+            background: white;
+        }
+        .hidden { display: none !important; }
+        select, button, input {
+            font-family: inherit;
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-container">
+        <!-- Mock Toast Notification -->
+        <div id="toast" class="mock-toast"></div>
+
+        <!-- Processing Overlay -->
+        <div id="processing" class="processing-overlay">
+            <div class="processing-spinner">
+                <div class="slds-spinner slds-spinner_medium" role="status">
+                    <span class="slds-assistive-text">Loading</span>
+                    <div class="slds-spinner__dot-a"></div>
+                    <div class="slds-spinner__dot-b"></div>
+                </div>
+                <p>Processing...</p>
+            </div>
+        </div>
+
+        <div class="mock-lightning-card">
+            <div class="slds-card__header slds-grid">
+                <div class="slds-media slds-media_center slds-has-flexi-truncate">
+                    <div class="slds-media__figure">
+                        <span class="slds-icon_container slds-icon-custom-63" title="KRNL Document Access & Compliance Tracker">
+                            <svg class="slds-icon slds-page-header__icon" aria-hidden="true">
+                                <use xlink:href="/assets/icons/custom-sprite/svg/symbols.svg#custom63"></use>
+                            </svg>
+                        </span>
+                    </div>
+                    <div class="slds-media__body">
+                        <h2 class="slds-card__header-title">
+                            <span>KRNL Document Access & Compliance Tracker</span>
+                        </h2>
+                    </div>
+                </div>
+            </div>
+
+            <div class="slds-card__body slds-card__body_inner">
+
+                <!-- Document Selection Section -->
+                <div class="slds-section slds-is-open">
+                    <h3 class="slds-section__title slds-theme_shade">
+                        <span class="slds-truncate slds-p-horizontal_small" title="Document Selection">Document Selection</span>
+                    </h3>
+                    <div class="slds-section__content">
+                        <div class="slds-grid slds-wrap slds-gutters">
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <div class="slds-form-element">
+                                    <label class="slds-form-element__label" for="documentSelect">Select Document</label>
+                                    <div class="slds-form-element__control">
+                                        <div class="slds-select_container">
+                                            <select class="slds-select" id="documentSelect" onchange="handleDocumentSelection(this)">
+                                                <option value="">Choose a document...</option>
+                                                <option value="0691234567890123">Sample Contract.pdf</option>
+                                                <option value="0691234567890124">Legal Document.docx</option>
+                                                <option value="0691234567890125">Compliance Report.xlsx</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <button class="slds-button slds-button_brand slds-m-left_x-small" onclick="handleUploadDocument()">
+                                    Upload New Document
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Document Details Section -->
+                <div id="documentDetails" class="slds-section slds-is-open slds-m-top_medium hidden">
+                    <h3 class="slds-section__title slds-theme_shade">
+                        <span class="slds-truncate slds-p-horizontal_small" title="Document Details">Document Details</span>
+                    </h3>
+                    <div class="slds-section__content">
+                        <div class="slds-grid slds-wrap slds-gutters">
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <dl class="slds-list_horizontal slds-wrap">
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Document Name:</dt>
+                                    <dd id="docName" class="slds-item_detail slds-truncate"></dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">File Type:</dt>
+                                    <dd id="docType" class="slds-item_detail slds-truncate"></dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Size:</dt>
+                                    <dd id="docSize" class="slds-item_detail slds-truncate"></dd>
+                                </dl>
+                            </div>
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <dl class="slds-list_horizontal slds-wrap">
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Document Hash:</dt>
+                                    <dd id="docHash" class="slds-item_detail slds-truncate"></dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Blockchain Status:</dt>
+                                    <dd class="slds-item_detail">
+                                        <span id="blockchainBadge" class="slds-badge">Not Registered</span>
+                                    </dd>
+                                </dl>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="slds-m-top_medium">
+                            <div class="slds-button-group" role="group">
+                                <button class="slds-button slds-button_neutral" onclick="handleViewDocument()">
+                                    View Document
+                                </button>
+                                <button class="slds-button slds-button_neutral" onclick="handleDownloadDocument()">
+                                    Download Document
+                                </button>
+                                <button id="registerBtn" class="slds-button slds-button_brand" onclick="handleRegisterBlockchain()">
+                                    Register on Blockchain
+                                </button>
+                                <button class="slds-button slds-button_success" onclick="handleValidateIntegrity()">
+                                    Validate Integrity
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Access Log Section -->
+                <div class="slds-section slds-is-open slds-m-top_medium">
+                    <h3 class="slds-section__title slds-theme_shade">
+                        <span class="slds-truncate slds-p-horizontal_small" title="Access History">Access History</span>
+                    </h3>
+                    <div class="slds-section__content">
+                        <table class="slds-table slds-table_cell-buffer slds-table_bordered" role="table">
+                            <thead>
+                                <tr class="slds-line-height_reset">
+                                    <th class="" scope="col">
+                                        <div class="slds-truncate" title="Access Time">Access Time</div>
+                                    </th>
+                                    <th class="" scope="col">
+                                        <div class="slds-truncate" title="Access Type">Access Type</div>
+                                    </th>
+                                    <th class="" scope="col">
+                                        <div class="slds-truncate" title="User">User</div>
+                                    </th>
+                                    <th class="" scope="col">
+                                        <div class="slds-truncate" title="Status">Status</div>
+                                    </th>
+                                    <th class="" scope="col">
+                                        <div class="slds-truncate" title="Blockchain Status">Blockchain Status</div>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="accessLogsTable">
+                                <tr>
+                                    <td colspan="5" class="slds-text-align_center slds-p-around_medium">
+                                        <div class="slds-text-heading_small slds-m-top_small">No access history available</div>
+                                        <div class="slds-text-color_weak">Access logs will appear here when documents are viewed or downloaded</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Compliance Dashboard -->
+                <div class="slds-section slds-is-open slds-m-top_medium">
+                    <h3 class="slds-section__title slds-theme_shade">
+                        <span class="slds-truncate slds-p-horizontal_small" title="Compliance Dashboard">Compliance Dashboard</span>
+                    </h3>
+                    <div class="slds-section__content">
+                        <div class="slds-grid slds-wrap slds-gutters">
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                                <article class="slds-tile slds-media">
+                                    <div class="slds-media__figure">
+                                        <span class="slds-icon_container slds-icon-custom-63">
+                                            <svg class="slds-icon slds-icon_medium" aria-hidden="true">
+                                                <use xlink:href="/assets/icons/custom-sprite/svg/symbols.svg#custom63"></use>
+                                            </svg>
+                                        </span>
+                                    </div>
+                                    <div class="slds-media__body">
+                                        <h3 class="slds-tile__title slds-truncate">Total Documents</h3>
+                                        <div class="slds-tile__detail">
+                                            <p id="totalDocs" class="slds-text-heading_large">150</p>
+                                        </div>
+                                    </div>
+                                </article>
+                            </div>
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                                <article class="slds-tile slds-media">
+                                    <div class="slds-media__figure">
+                                        <span class="slds-icon_container slds-icon-custom-78">
+                                            <svg class="slds-icon slds-icon_medium" aria-hidden="true">
+                                                <use xlink:href="/assets/icons/custom-sprite/svg/symbols.svg#custom78"></use>
+                                            </svg>
+                                        </span>
+                                    </div>
+                                    <div class="slds-media__body">
+                                        <h3 class="slds-tile__title slds-truncate">Blockchain Registered</h3>
+                                        <div class="slds-tile__detail">
+                                            <p id="blockchainDocs" class="slds-text-heading_large">135</p>
+                                        </div>
+                                    </div>
+                                </article>
+                            </div>
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                                <article class="slds-tile slds-media">
+                                    <div class="slds-media__figure">
+                                        <span class="slds-icon_container slds-icon-custom-85">
+                                            <svg class="slds-icon slds-icon_medium" aria-hidden="true">
+                                                <use xlink:href="/assets/icons/custom-sprite/svg/symbols.svg#custom85"></use>
+                                            </svg>
+                                        </span>
+                                    </div>
+                                    <div class="slds-media__body">
+                                        <h3 class="slds-tile__title slds-truncate">Total Access Events</h3>
+                                        <div class="slds-tile__detail">
+                                            <p id="totalEvents" class="slds-text-heading_large">1247</p>
+                                        </div>
+                                    </div>
+                                </article>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Mock data matching the LWC component
+        const mockDocuments = [
+            {
+                id: '0691234567890123',
+                title: 'Sample Contract.pdf',
+                fileType: 'PDF',
+                contentSize: 1024576,
+            },
+            {
+                id: '0691234567890124',
+                title: 'Legal Document.docx',
+                fileType: 'WORD',
+                contentSize: 2048576,
+            },
+            {
+                id: '0691234567890125',
+                title: 'Compliance Report.xlsx',
+                fileType: 'EXCEL',
+                contentSize: 512288,
+            }
+        ];
+
+        let selectedDocument = null;
+        let documentHash = '';
+        let blockchainStatus = 'Not Registered';
+        let accessLogs = [];
+        let complianceStats = { totalDocuments: 150, blockchainRegistered: 135, totalAccessEvents: 1247 };
+        let isProcessing = false;
+
+        function showToast(title, message, variant) {
+            const toast = document.getElementById('toast');
+            toast.textContent = `${title}: ${message}`;
+            toast.className = `mock-toast ${variant}`;
+            toast.style.display = 'block';
+            setTimeout(() => {
+                toast.style.display = 'none';
+            }, 3000);
+        }
+
+        function showProcessing() {
+            document.getElementById('processing').style.display = 'block';
+        }
+
+        function hideProcessing() {
+            document.getElementById('processing').style.display = 'none';
+        }
+
+        function generateMockHash(title) {
+            const hash = btoa(title + Date.now()).replace(/[^a-zA-Z0-9]/g, '').substring(0, 64);
+            return '0x' + hash.toLowerCase().padEnd(64, '0');
+        }
+
+        function updateAccessLogsTable() {
+            const tbody = document.getElementById('accessLogsTable');
+            if (accessLogs.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="slds-text-align_center slds-p-around_medium">
+                            <div class="slds-text-heading_small slds-m-top_small">No access history available</div>
+                            <div class="slds-text-color_weak">Access logs will appear here when documents are viewed or downloaded</div>
+                        </td>
+                    </tr>
+                `;
+            } else {
+                tbody.innerHTML = accessLogs.map(log => `
+                    <tr>
+                        <td>${log.accessTimestamp.toLocaleString()}</td>
+                        <td>${log.accessType}</td>
+                        <td>${log.userName}</td>
+                        <td>${log.status}</td>
+                        <td><span class="slds-badge ${log.blockchainStatusClass}">${log.blockchainStatus}</span></td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        function handleDocumentSelection(select) {
+            const selectedId = select.value;
+
+            if (selectedId) {
+                showProcessing();
+
+                selectedDocument = mockDocuments.find(doc => doc.id === selectedId);
+
+                setTimeout(() => {
+                    documentHash = generateMockHash(selectedDocument.title);
+                    blockchainStatus = Math.random() > 0.3 ? 'Registered' : 'Not Registered';
+
+                    // Update UI
+                    document.getElementById('docName').textContent = selectedDocument.title;
+                    document.getElementById('docType').textContent = selectedDocument.fileType;
+                    document.getElementById('docSize').textContent = `${selectedDocument.contentSize} bytes`;
+                    document.getElementById('docHash').textContent = documentHash;
+
+                    const badge = document.getElementById('blockchainBadge');
+                    badge.textContent = blockchainStatus;
+                    badge.className = `slds-badge ${blockchainStatus === 'Registered' ? 'slds-theme_success' : 'slds-theme_warning'}`;
+
+                    const registerBtn = document.getElementById('registerBtn');
+                    if (blockchainStatus === 'Registered') {
+                        registerBtn.disabled = true;
+                        registerBtn.textContent = 'Already Registered';
+                    } else {
+                        registerBtn.disabled = false;
+                        registerBtn.textContent = 'Register on Blockchain';
+                    }
+
+                    // Show document details section
+                    document.getElementById('documentDetails').classList.remove('hidden');
+
+                    // Generate some mock access logs
+                    accessLogs = [
+                        {
+                            id: 'log_001',
+                            accessTimestamp: new Date(Date.now() - 3600000),
+                            accessType: 'view',
+                            userName: 'John Doe',
+                            status: 'Completed',
+                            blockchainStatus: 'Logged',
+                            blockchainStatusClass: 'slds-theme_success'
+                        }
+                    ].slice(0, Math.floor(Math.random() * 3) + 1);
+
+                    updateAccessLogsTable();
+                    hideProcessing();
+                    showToast('Success', 'Document loaded successfully', 'success');
+                }, 1500);
+            } else {
+                selectedDocument = null;
+                documentHash = '';
+                blockchainStatus = 'Not Registered';
+                accessLogs = [];
+                document.getElementById('documentDetails').classList.add('hidden');
+                updateAccessLogsTable();
+            }
+        }
+
+        async function logAndExecuteAccess(accessType, callback) {
+            showProcessing();
+
+            setTimeout(() => {
+                const newLog = {
+                    id: 'log_' + Date.now(),
+                    accessTimestamp: new Date(),
+                    accessType: accessType,
+                    userName: 'Current User (Demo)',
+                    status: 'Completed',
+                    blockchainStatus: 'Logged',
+                    blockchainStatusClass: 'slds-theme_success'
+                };
+
+                accessLogs = [newLog, ...accessLogs];
+                complianceStats.totalAccessEvents += 1;
+
+                document.getElementById('totalEvents').textContent = complianceStats.totalAccessEvents;
+                updateAccessLogsTable();
+
+                if (callback) callback();
+
+                hideProcessing();
+                showToast('Success', `Document ${accessType} logged successfully`, 'success');
+            }, 1000);
+        }
+
+        function handleViewDocument() {
+            logAndExecuteAccess('view', () => {
+                showToast('Info', 'Document view would open in real environment', 'info');
+            });
+        }
+
+        function handleDownloadDocument() {
+            logAndExecuteAccess('download', () => {
+                showToast('Info', 'Document download would start in real environment', 'info');
+            });
+        }
+
+        function handleRegisterBlockchain() {
+            showProcessing();
+
+            setTimeout(() => {
+                blockchainStatus = 'Registered';
+                complianceStats.blockchainRegistered += 1;
+
+                const badge = document.getElementById('blockchainBadge');
+                badge.textContent = 'Registered';
+                badge.className = 'slds-badge slds-theme_success';
+
+                const registerBtn = document.getElementById('registerBtn');
+                registerBtn.disabled = true;
+                registerBtn.textContent = 'Already Registered';
+
+                document.getElementById('blockchainDocs').textContent = complianceStats.blockchainRegistered;
+
+                hideProcessing();
+                showToast('Success', 'Document registered on blockchain (simulated)', 'success');
+            }, 3000);
+        }
+
+        function handleValidateIntegrity() {
+            showProcessing();
+
+            setTimeout(() => {
+                const isValid = Math.random() > 0.1; // 90% success rate
+                const message = isValid ?
+                    'Document integrity validated successfully' :
+                    'Document integrity validation failed';
+                const variant = isValid ? 'success' : 'error';
+
+                hideProcessing();
+                showToast(isValid ? 'Success' : 'Error', message, variant);
+            }, 2000);
+        }
+
+        function handleUploadDocument() {
+            showToast('Info', 'File upload would work in real Salesforce environment', 'info');
+
+            // Simulate adding a new document
+            const newDoc = {
+                id: '069' + Date.now(),
+                title: 'Uploaded Document.pdf',
+                fileType: 'PDF',
+                contentSize: 1234567,
+            };
+
+            mockDocuments.push(newDoc);
+            complianceStats.totalDocuments += 1;
+
+            // Update select options
+            const select = document.getElementById('documentSelect');
+            const option = document.createElement('option');
+            option.value = newDoc.id;
+            option.textContent = newDoc.title;
+            select.appendChild(option);
+
+            document.getElementById('totalDocs').textContent = complianceStats.totalDocuments;
+            showToast('Success', 'Document uploaded successfully (simulated)', 'success');
+        }
+
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            updateAccessLogsTable();
+            console.log('KRNL Document Access Tracker Preview - Ready for testing');
+        });
+    </script>
+</body>
+</html>

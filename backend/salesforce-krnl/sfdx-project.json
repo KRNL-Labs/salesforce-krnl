@@ -1,0 +1,16 @@
+{
+  "packageDirectories": [
+    {
+      "path": "force-app",
+      "default": true,
+      "package": "KRNL Document Access",
+      "versionName": "ver 1.0",
+      "versionNumber": "1.0.0.NEXT"
+    }
+  ],
+  "name": "KRNL Document Access & Compliance",
+  "namespace": "KRNL",
+  "sfdcLoginUrl": "https://login.salesforce.com",
+  "sourceApiVersion": "59.0",
+  "packageAliases": {}
+}

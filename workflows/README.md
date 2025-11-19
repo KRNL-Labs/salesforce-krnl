@@ -1,0 +1,214 @@
+# KRNL Document Access & Compliance Workflows
+
+This directory contains KRNL workflow configurations for the Salesforce Document Access & Compliance system. These workflows integrate Salesforce with blockchain technology for secure document management and compliance tracking.
+
+## Architecture Overview
+
+The system uses KRNL's workflow orchestration to create a bridge between Salesforce and blockchain networks, enabling:
+
+- **Document Registration**: Register Salesforce documents on blockchain
+- **Access Logging**: Log all document access events with compliance tracking
+- **Integrity Validation**: Validate document integrity against blockchain records
+
+## Workflow Configurations
+
+### 1. Document Registration (`document-registration-workflow.json`)
+
+Registers Salesforce documents on the blockchain for immutable tracking.
+
+**Workflow Steps:**
+1. **fetch-salesforce-document**: Retrieves document metadata from Salesforce
+2. **fetch-document-content**: Gets document binary content
+3. **generate-document-hash**: Creates SHA-256 hash of document + metadata
+4. **prepare-document-metadata**: Encodes metadata for blockchain storage
+5. **validate-compliance**: Checks document against compliance rules
+6. **register-on-blockchain**: Registers document on DocumentAccessRegistry contract
+7. **update-salesforce-record**: Creates blockchain record in Salesforce
+
+**Usage:**
+```typescript
+import { useKRNL } from '@krnl-dev/sdk-react-4337';
+import documentRegistrationWorkflow from './document-registration-workflow.json';
+
+const { executeWorkflowFromTemplate } = useKRNL();
+
+await executeWorkflowFromTemplate(documentRegistrationWorkflow, {
+  '{{ENV.SENDER_ADDRESS}}': smartAccountAddress,
+  '{{ENV.DOCUMENT_REGISTRY_CONTRACT}}': contractAddress,
+  '{{DOCUMENT_ID}}': salesforceDocumentId,
+  '{{SALESFORCE_ACCESS_TOKEN}}': accessToken,
+  '{{USER_SIGNATURE}}': signedIntent
+});
+```
+
+### 2. Document Access Logging (`document-access-logging-workflow.json`)
+
+Logs every document access event on blockchain for compliance and audit trails.
+
+**Workflow Steps:**
+1. **validate-document-exists**: Confirms document exists in Salesforce
+2. **get-user-info**: Retrieves user information from Salesforce
+3. **capture-access-context**: Captures session and device context
+4. **validate-access-permissions**: Checks user permissions
+5. **check-compliance-rules**: Validates against compliance frameworks
+6. **prepare-access-log**: Encodes access data for blockchain
+7. **log-to-blockchain**: Logs access event on blockchain
+8. **create-salesforce-access-log**: Creates audit record in Salesforce
+9. **send-compliance-notification**: Sends alerts if needed
+
+**Integration with LWC:**
+```javascript
+// In documentAccessTracker LWC component
+async logAndExecuteAccess(accessType, callback) {
+    const { executeWorkflowFromTemplate } = useKRNL();
+
+    await executeWorkflowFromTemplate(accessLoggingWorkflow, {
+        '{{DOCUMENT_ID}}': this.selectedDocumentId,
+        '{{ACCESS_TYPE}}': accessType,
+        '{{USER_ID}}': this.currentUserId,
+        '{{CLIENT_IP}}': this.getClientIP(),
+        '{{USER_AGENT}}': navigator.userAgent
+    });
+
+    if (callback) callback();
+}
+```
+
+### 3. Document Integrity Validation (`document-integrity-validation-workflow.json`)
+
+Validates document integrity by comparing current document hash with blockchain records.
+
+**Workflow Steps:**
+1. **fetch-current-document**: Gets current document from Salesforce
+2. **get-current-version-data**: Retrieves current document content
+3. **generate-current-hash**: Creates hash of current document
+4. **fetch-blockchain-record**: Gets stored hash from blockchain
+5. **fetch-salesforce-blockchain-record**: Gets Salesforce blockchain record
+6. **compare-hashes**: Compares all hash values
+7. **validate-document-integrity**: Performs integrity analysis
+8. **generate-validation-report**: Creates detailed validation report
+9. **update-validation-record**: Stores validation results
+10. **send-integrity-alert**: Sends alerts if tampering detected
+
+## Configuration Files
+
+### `krnl-config.json`
+
+Main configuration file containing:
+- **KRNL Node settings**: Network, factory address, app secret
+- **Contract addresses**: DocumentAccessRegistry and related contracts
+- **Salesforce configuration**: Instance URL, API version, object mappings
+- **Executor images**: Pre-built KRNL executors for different tasks
+- **Compliance rules**: File size limits, allowed types, regulatory frameworks
+- **Notification settings**: Email addresses, Slack webhooks, alert thresholds
+
+## Integration Patterns
+
+### LWC Integration
+
+```javascript
+// documentAccessTracker.js
+import { LightningElement, api } from 'lwc';
+import { useKRNL, useKRNLAuth } from '@krnl-dev/sdk-react-4337';
+
+export default class DocumentAccessTracker extends LightningElement {
+    @api recordId;
+
+    async handleDocumentAccess(event) {
+        const accessType = event.target.dataset.action;
+
+        // 1. Sign transaction intent
+        const intent = this.createTransactionIntent(accessType);
+        const signature = await this.signIntent(intent);
+
+        // 2. Execute KRNL workflow
+        const workflow = await this.loadWorkflow('document-access-logging');
+        const parameters = this.createWorkflowParameters(signature);
+
+        await this.executeWorkflow(workflow, parameters);
+
+        // 3. Execute actual document action
+        this.performDocumentAction(accessType);
+    }
+}
+```
+
+### Salesforce Apex Integration
+
+```apex
+// DocumentKRNLIntegration.cls
+public with sharing class DocumentKRNLIntegration {
+
+    @future(callout=true)
+    public static void registerDocumentAsync(Id documentId) {
+        // Create KRNL workflow callout
+        KRNLWorkflowService.executeWorkflow('document-registration', new Map<String, Object>{
+            'DOCUMENT_ID' => documentId,
+            'SALESFORCE_ACCESS_TOKEN' => getAccessToken(),
+            'SALESFORCE_INSTANCE_URL' => URL.getSalesforceBaseUrl().toExternalForm()
+        });
+    }
+}
+```
+
+## Environment Variables
+
+Required environment variables for workflow execution:
+
+```env
+# KRNL Configuration
+KRNL_NODE_URL=https://node.krnl.xyz
+FACTORY_ADDRESS=0x...
+APP_SECRET=your-app-secret
+
+# Blockchain
+DOCUMENT_REGISTRY_CONTRACT_ADDRESS=0x...
+TARGET_CONTRACT_OWNER=0x...
+ATTESTOR_ADDRESS=0x...
+
+# Salesforce
+SALESFORCE_INSTANCE_URL=https://yourorg.my.salesforce.com
+SALESFORCE_ACCESS_TOKEN=your-token
+
+# Infrastructure
+RPC_SEPOLIA_URL=https://sepolia.infura.io/v3/...
+PIMLICO_API_KEY=your-pimlico-key
+
+# Notifications
+COMPLIANCE_TEAM_EMAIL=compliance@yourorg.com
+SECURITY_TEAM_EMAIL=security@yourorg.com
+SLACK_WEBHOOK_URL=https://hooks.slack.com/...
+```
+
+## Deployment
+
+1. **Deploy Smart Contracts**: Deploy DocumentAccessRegistry to Sepolia
+2. **Configure KRNL Node**: Set up attestor and executor permissions
+3. **Update Salesforce**: Deploy Apex classes and LWC components
+4. **Environment Setup**: Configure all required environment variables
+5. **Test Workflows**: Run test scenarios to validate integration
+
+## Monitoring & Alerting
+
+The workflows include built-in monitoring:
+
+- **Real-time status updates** via KRNL SDK hooks
+- **Compliance score tracking** with configurable thresholds
+- **Integrity validation alerts** for potential tampering
+- **Failed workflow notifications** for operational issues
+
+## Security Considerations
+
+- **Access Control**: Role-based permissions in both Salesforce and blockchain
+- **Data Privacy**: Sensitive data stays in Salesforce, only hashes on blockchain
+- **Audit Trail**: Complete immutable audit trail on blockchain
+- **Encryption**: All communications encrypted in transit
+- **Key Management**: Smart account keys managed by KRNL infrastructure
+
+## Compliance Frameworks
+
+Workflows support multiple regulatory frameworks:
+- **SOX**: Financial document controls and audit trails
+- **GDPR**: Data protection and privacy compliance
+- **HIPAA**: Healthcare information security requirements
+- **Custom**: Configurable rules for industry-specific requirements

@@ -1,0 +1,217 @@
+<template>
+    <lightning-card title="KRNL Document Access & Compliance Tracker" icon-name="custom:custom63">
+        <div class="slds-card__body slds-card__body_inner">
+
+            <!-- Document Selection Section -->
+            <div class="slds-section slds-is-open">
+                <h3 class="slds-section__title slds-theme_shade">
+                    <span class="slds-truncate slds-p-horizontal_small" title="Document Selection">Document Selection</span>
+                </h3>
+                <div class="slds-section__content">
+                    <div class="slds-grid slds-wrap slds-gutters">
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                            <lightning-combobox
+                                name="documentPicker"
+                                label="Select Document"
+                                value={selectedDocumentId}
+                                placeholder="Choose a document..."
+                                options={documentOptions}
+                                onchange={handleDocumentSelection}>
+                            </lightning-combobox>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                            <lightning-button
+                                label="Upload New Document"
+                                variant="brand"
+                                onclick={handleUploadDocument}
+                                class="slds-m-left_x-small">
+                            </lightning-button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Document Details Section -->
+            <template if:true={selectedDocument}>
+                <div class="slds-section slds-is-open slds-m-top_medium">
+                    <h3 class="slds-section__title slds-theme_shade">
+                        <span class="slds-truncate slds-p-horizontal_small" title="Document Details">Document Details</span>
+                    </h3>
+                    <div class="slds-section__content">
+                        <div class="slds-grid slds-wrap slds-gutters">
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <dl class="slds-list_horizontal slds-wrap">
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Document Name:</dt>
+                                    <dd class="slds-item_detail slds-truncate">{selectedDocument.title}</dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">File Type:</dt>
+                                    <dd class="slds-item_detail slds-truncate">{selectedDocument.fileType}</dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Size:</dt>
+                                    <dd class="slds-item_detail slds-truncate">{selectedDocument.contentSize} bytes</dd>
+                                </dl>
+                            </div>
+                            <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
+                                <dl class="slds-list_horizontal slds-wrap">
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Document Hash:</dt>
+                                    <dd class="slds-item_detail slds-truncate">
+                                        <lightning-formatted-text value={documentHash}></lightning-formatted-text>
+                                    </dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Blockchain Status:</dt>
+                                    <dd class="slds-item_detail">
+                                        <lightning-badge label={blockchainStatus} variant={blockchainStatusVariant}></lightning-badge>
+                                    </dd>
+                                </dl>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="slds-m-top_medium">
+                            <lightning-button-group>
+                                <lightning-button
+                                    label="View Document"
+                                    variant="neutral"
+                                    onclick={handleViewDocument}
+                                    disabled={isProcessing}>
+                                </lightning-button>
+                                <lightning-button
+                                    label="Download Document"
+                                    variant="neutral"
+                                    onclick={handleDownloadDocument}
+                                    disabled={isProcessing}>
+                                </lightning-button>
+                                <lightning-button
+                                    label="Register on Blockchain"
+                                    variant="brand"
+                                    onclick={handleRegisterBlockchain}
+                                    disabled={isBlockchainRegistered}
+                                    class={isBlockchainRegistered}>
+                                </lightning-button>
+                                <lightning-button
+                                    label="Validate Integrity"
+                                    variant="success"
+                                    onclick={handleValidateIntegrity}
+                                    disabled={isProcessing}>
+                                </lightning-button>
+                            </lightning-button-group>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Access Log Section -->
+            <div class="slds-section slds-is-open slds-m-top_medium">
+                <h3 class="slds-section__title slds-theme_shade">
+                    <span class="slds-truncate slds-p-horizontal_small" title="Access History">Access History</span>
+                </h3>
+                <div class="slds-section__content">
+                    <template if:true={hasAccessLogs}>
+                        <lightning-datatable
+                            key-field="id"
+                            data={accessLogs}
+                            columns={accessLogColumns}
+                            hide-checkbox-column="true"
+                            show-row-number-column="true">
+                        </lightning-datatable>
+                    </template>
+                    <template if:false={hasAccessLogs}>
+                        <div class="slds-text-align_center slds-p-around_medium">
+                            <lightning-icon icon-name="custom:custom85" size="large" alternative-text="No data"></lightning-icon>
+                            <p class="slds-text-heading_small slds-m-top_small">No access history available</p>
+                            <p class="slds-text-color_weak">Access logs will appear here when documents are viewed or downloaded</p>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- Compliance Dashboard -->
+            <div class="slds-section slds-is-open slds-m-top_medium">
+                <h3 class="slds-section__title slds-theme_shade">
+                    <span class="slds-truncate slds-p-horizontal_small" title="Compliance Dashboard">Compliance Dashboard</span>
+                </h3>
+                <div class="slds-section__content">
+                    <div class="slds-grid slds-wrap slds-gutters">
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                            <article class="slds-tile slds-media">
+                                <div class="slds-media__figure">
+                                    <lightning-icon icon-name="custom:custom63" size="medium"></lightning-icon>
+                                </div>
+                                <div class="slds-media__body">
+                                    <h3 class="slds-tile__title slds-truncate">Total Documents</h3>
+                                    <div class="slds-tile__detail">
+                                        <p class="slds-text-heading_large">{totalDocuments}</p>
+                                    </div>
+                                </div>
+                            </article>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                            <article class="slds-tile slds-media">
+                                <div class="slds-media__figure">
+                                    <lightning-icon icon-name="custom:custom78" size="medium"></lightning-icon>
+                                </div>
+                                <div class="slds-media__body">
+                                    <h3 class="slds-tile__title slds-truncate">Blockchain Registered</h3>
+                                    <div class="slds-tile__detail">
+                                        <p class="slds-text-heading_large">{blockchainRegisteredCount}</p>
+                                    </div>
+                                </div>
+                            </article>
+                        </div>
+                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
+                            <article class="slds-tile slds-media">
+                                <div class="slds-media__figure">
+                                    <lightning-icon icon-name="custom:custom85" size="medium"></lightning-icon>
+                                </div>
+                                <div class="slds-media__body">
+                                    <h3 class="slds-tile__title slds-truncate">Total Access Events</h3>
+                                    <div class="slds-tile__detail">
+                                        <p class="slds-text-heading_large">{totalAccessEvents}</p>
+                                    </div>
+                                </div>
+                            </article>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Spinner -->
+        <template if:true={isProcessing}>
+            <lightning-spinner alternative-text="Processing..." size="medium"></lightning-spinner>
+        </template>
+
+        <!-- File Upload Modal -->
+        <template if:true={showUploadModal}>
+            <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header">
+                        <lightning-button-icon
+                            icon-name="utility:close"
+                            onclick={handleCloseUpload}
+                            alternative-text="close"
+                            variant="bare-inverse"
+                            class="slds-modal__close">
+                        </lightning-button-icon>
+                        <h2 class="slds-text-heading_medium">Upload Document</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <lightning-file-upload
+                            label="Upload Document"
+                            name="fileUploader"
+                            accept=".pdf,.doc,.docx,.txt,.xls,.xlsx"
+                            record-id={recordId}
+                            onuploadfinished={handleUploadFinished}
+                            multiple>
+                        </lightning-file-upload>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button
+                            variant="neutral"
+                            label="Cancel"
+                            onclick={handleCloseUpload}>
+                        </lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open"></div>
+        </template>
+    </lightning-card>
+</template>

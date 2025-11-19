@@ -1,0 +1,87 @@
+{
+  "krnl": {
+    "version": "v1.0.0",
+    "nodeUrl": "https://node.krnl.xyz",
+    "chainId": 11155111,
+    "network": "sepolia",
+    "factoryAddress": "{{FACTORY_ADDRESS}}",
+    "appSecret": "{{APP_SECRET}}"
+  },
+  "contracts": {
+    "documentRegistry": {
+      "address": "{{DOCUMENT_REGISTRY_CONTRACT_ADDRESS}}",
+      "abi": "./contracts/DocumentAccessRegistry.abi.json"
+    },
+    "targetContractOwner": "{{TARGET_CONTRACT_OWNER}}"
+  },
+  "salesforce": {
+    "instanceUrl": "{{SALESFORCE_INSTANCE_URL}}",
+    "apiVersion": "v59.0",
+    "objects": {
+      "contentDocument": "ContentDocument",
+      "contentVersion": "ContentVersion",
+      "documentAccessLog": "Document_Access_Log__c",
+      "blockchainDocument": "Blockchain_Document__c",
+      "documentValidation": "Document_Validation__c"
+    }
+  },
+  "attestors": {
+    "primary": "{{ATTESTOR_ADDRESS}}",
+    "backup": "{{BACKUP_ATTESTOR_ADDRESS}}"
+  },
+  "executors": {
+    "http": "ghcr.io/krnl-labs/executor-http@sha256:07ef35b261014304a0163502a7f1dec5395c5cac1fc381dc1f79b052389ab0d5",
+    "crypto": "ghcr.io/krnl-labs/executor-crypto@sha256:a1b2c3d4e5f6789012345678901234567890abcd",
+    "evmEncoder": "ghcr.io/krnl-labs/executor-encoder-evm@sha256:b28823d12eb1b16cbcc34c751302cd2dbe7e35480a5bc20e4e7ad50a059b6611",
+    "blockchain": "ghcr.io/krnl-labs/executor-blockchain@sha256:d2e3f4a5b6c7890123456789012345678901fghi",
+    "compliance": "ghcr.io/krnl-labs/executor-compliance@sha256:c1d2e3f4a5b6789012345678901234567890efgh",
+    "context": "ghcr.io/krnl-labs/executor-context@sha256:e3f4a5b6c7d8901234567890123456789012ghij",
+    "permission": "ghcr.io/krnl-labs/executor-permission@sha256:f4a5b6c7d8e9012345678901234567890123hijk",
+    "validator": "ghcr.io/krnl-labs/executor-validator@sha256:h6b7c8d9e0f1234567890123456789012345jklm",
+    "integrity": "ghcr.io/krnl-labs/executor-integrity@sha256:i7c8d9e0f1a2345678901234567890123456klmn",
+    "report": "ghcr.io/krnl-labs/executor-report@sha256:j8d9e0f1a2b3456789012345678901234567lmno",
+    "notification": "ghcr.io/krnl-labs/executor-notification@sha256:g5a6b7c8d9e0123456789012345678901234ijkl"
+  },
+  "compliance": {
+    "requiredFields": ["title", "fileType", "ownerId"],
+    "maxFileSize": 52428800,
+    "allowedFileTypes": ["pdf", "doc", "docx", "txt", "xls", "xlsx"],
+    "retentionPolicy": "7years",
+    "regulatoryFrameworks": ["SOX", "GDPR", "HIPAA"],
+    "dataClassificationLevels": ["Public", "Internal", "Confidential", "Restricted"]
+  },
+  "notifications": {
+    "complianceTeamEmail": "{{COMPLIANCE_TEAM_EMAIL}}",
+    "securityTeamEmail": "{{SECURITY_TEAM_EMAIL}}",
+    "slackWebhook": "{{SLACK_WEBHOOK_URL}}",
+    "enableRealTimeAlerts": true,
+    "alertThresholds": {
+      "complianceScore": 80,
+      "integrityScore": 90,
+      "riskLevel": "MEDIUM"
+    }
+  },
+  "gas": {
+    "maxFeePerGas": "20000000000",
+    "maxPriorityFeePerGas": "2000000000",
+    "gasLimit": {
+      "documentRegistration": "200000",
+      "accessLogging": "150000",
+      "integrityValidation": "100000"
+    }
+  },
+  "bundler": {
+    "url": "https://api.pimlico.io/v2/sepolia/rpc?apikey={{PIMLICO_API_KEY}}",
+    "sponsorExecution": true
+  },
+  "paymaster": {
+    "url": "https://api.pimlico.io/v2/sepolia/rpc?apikey={{PIMLICO_API_KEY}}",
+    "enabled": true
+  },
+  "secrets": {
+    "rpcSepoliaURL": "{{RPC_SEPOLIA_URL}}",
+    "pimlico-apikey": "{{PIMLICO_API_KEY}}",
+    "salesforceAccessToken": "{{SALESFORCE_ACCESS_TOKEN}}",
+    "openaiApiKey": "{{OPENAI_API_KEY}}"
+  }
+}

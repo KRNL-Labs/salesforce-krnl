@@ -1,0 +1,168 @@
+/* Document Access Tracker Styles */
+
+.slds-section__content {
+    padding: 1rem;
+}
+
+.slds-tile {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 1px solid #dee2e6;
+    border-radius: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.slds-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.slds-tile__title {
+    color: #495057;
+    font-weight: 600;
+}
+
+.slds-text-heading_large {
+    color: #007acc;
+    font-weight: 700;
+}
+
+/* Custom button group styling */
+.slds-button-group .slds-button {
+    margin-right: 0.5rem;
+}
+
+.slds-button-group .slds-button:last-child {
+    margin-right: 0;
+}
+
+/* Document hash display */
+lightning-formatted-text {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.75rem;
+    background-color: #f8f9fa;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid #dee2e6;
+}
+
+/* Access log table customization */
+lightning-datatable {
+    --slds-c-datatable-cell-buffer: 1rem;
+}
+
+/* Status badges */
+.blockchain-status-success {
+    color: #28a745;
+}
+
+.blockchain-status-pending {
+    color: #ffc107;
+}
+
+.blockchain-status-error {
+    color: #dc3545;
+}
+
+/* Loading state */
+.slds-spinner_container {
+    position: relative;
+    z-index: 9999;
+}
+
+/* Modal adjustments */
+.slds-modal__container {
+    max-width: 50rem;
+}
+
+.slds-file-upload {
+    border: 2px dashed #007acc;
+    border-radius: 0.5rem;
+    padding: 2rem;
+    text-align: center;
+    transition: all 0.2s ease;
+}
+
+.slds-file-upload:hover {
+    border-color: #0056b3;
+    background-color: #f8f9fa;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .slds-button-group {
+        flex-direction: column;
+    }
+
+    .slds-button-group .slds-button {
+        margin-right: 0;
+        margin-bottom: 0.5rem;
+        width: 100%;
+    }
+
+    .slds-button-group .slds-button:last-child {
+        margin-bottom: 0;
+    }
+}
+
+/* Custom icons for compliance stats */
+.compliance-stat-icon {
+    background: linear-gradient(135deg, #007acc 0%, #0056b3 100%);
+    color: white;
+    border-radius: 50%;
+    padding: 0.5rem;
+}
+
+/* Empty state styling */
+.empty-state {
+    text-align: center;
+    padding: 3rem 1rem;
+}
+
+.empty-state lightning-icon {
+    opacity: 0.5;
+}
+
+/* Card enhancements */
+lightning-card {
+    --slds-c-card-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    --slds-c-card-radius-border: 0.5rem;
+}
+
+/* Section headers */
+.slds-section__title {
+    background: linear-gradient(90deg, #007acc 0%, #0056b3 100%);
+    color: white;
+    padding: 0.75rem 1rem;
+    margin: 0 -1rem;
+    border-radius: 0.25rem;
+    font-weight: 600;
+}
+
+.slds-section__title .slds-truncate {
+    color: white;
+}
+
+/* Animation classes */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* Success/Error state indicators */
+.integrity-valid {
+    border-left: 4px solid #28a745;
+    background-color: #d4edda;
+    padding: 1rem;
+    border-radius: 0 0.25rem 0.25rem 0;
+}
+
+.integrity-invalid {
+    border-left: 4px solid #dc3545;
+    background-color: #f8d7da;
+    padding: 1rem;
+    border-radius: 0 0.25rem 0.25rem 0;
+}
