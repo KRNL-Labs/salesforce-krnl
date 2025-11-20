@@ -1,11 +1,17 @@
 const { logger } = require('../utils/logger');
 const axios = require('axios');
+const { buildTransactionIntent } = require('./intentBuilder');
 
 class KRNLService {
   constructor() {
     this.nodeUrl = process.env.KRNL_NODE_URL || 'https://node.krnl.xyz';
     this.sessions = new Map(); // In-memory storage for testing
-    this.mockMode = process.env.NODE_ENV === 'development' || process.env.MOCK_KRNL === 'true';
+    this.mockMode = process.env.MOCK_KRNL === 'true';
+
+    logger.info('KRNLService initialized', {
+      nodeUrl: this.nodeUrl,
+      mockMode: this.mockMode
+    });
   }
 
   /**
@@ -22,8 +28,13 @@ class KRNLService {
     }
 
     try {
-      // In production, this would call the actual KRNL node
+      // In production, this calls the actual KRNL node using the workflow DSL
       const workflowTemplate = require('../../workflows/document-registration-workflow.json');
+
+      // Build transaction intent values for KRNL DSL placeholders
+      const intent = buildTransactionIntent({
+        delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
+      });
 
       const workflowParams = {
         ENV: {
@@ -35,7 +46,10 @@ class KRNLService {
         DOCUMENT_HASH: docHash,
         SALESFORCE_ACCESS_TOKEN: process.env.SALESFORCE_ACCESS_TOKEN,
         SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL,
-        USER_SIGNATURE: 'mock_signature_for_testing'
+        TRANSACTION_INTENT_DELEGATE: intent.delegate,
+        TRANSACTION_INTENT_ID: intent.id,
+        TRANSACTION_INTENT_DEADLINE: intent.deadline,
+        USER_SIGNATURE: intent.signature
       };
 
       // Mock KRNL API call
@@ -84,6 +98,10 @@ class KRNLService {
     try {
       const workflowTemplate = require('../../workflows/document-access-logging-workflow.json');
 
+      const intent = buildTransactionIntent({
+        delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
+      });
+
       const workflowParams = {
         ENV: {
           SENDER_ADDRESS: process.env.SENDER_ADDRESS,
@@ -98,7 +116,11 @@ class KRNLService {
         USER_AGENT: userAgent,
         SALESFORCE_ACCESS_TOKEN: process.env.SALESFORCE_ACCESS_TOKEN,
         SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL,
-        CURRENT_TIMESTAMP: new Date().toISOString()
+        CURRENT_TIMESTAMP: new Date().toISOString(),
+        TRANSACTION_INTENT_DELEGATE: intent.delegate,
+        TRANSACTION_INTENT_ID: intent.id,
+        TRANSACTION_INTENT_DEADLINE: intent.deadline,
+        USER_SIGNATURE: intent.signature
       };
 
       const response = await this._callKRNLNode('executeWorkflow', {
@@ -136,6 +158,10 @@ class KRNLService {
     try {
       const workflowTemplate = require('../../workflows/document-integrity-validation-workflow.json');
 
+      const intent = buildTransactionIntent({
+        delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
+      });
+
       const workflowParams = {
         ENV: {
           SENDER_ADDRESS: process.env.SENDER_ADDRESS,
@@ -146,7 +172,11 @@ class KRNLService {
         DOCUMENT_HASH: documentHash,
         SALESFORCE_ACCESS_TOKEN: process.env.SALESFORCE_ACCESS_TOKEN,
         SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL,
-        CURRENT_TIMESTAMP: new Date().toISOString()
+        CURRENT_TIMESTAMP: new Date().toISOString(),
+        TRANSACTION_INTENT_DELEGATE: intent.delegate,
+        TRANSACTION_INTENT_ID: intent.id,
+        TRANSACTION_INTENT_DEADLINE: intent.deadline,
+        USER_SIGNATURE: intent.signature
       };
 
       const response = await this._callKRNLNode('executeWorkflow', {
@@ -346,6 +376,13 @@ class KRNLService {
    * Call KRNL node (mocked for testing)
    */
   async _callKRNLNode(method, params) {
+    logger.info('Preparing KRNL node call', {
+      method,
+      mockMode: this.mockMode,
+      nodeUrl: this.nodeUrl,
+      sessionId: params && params.sessionId
+    });
+
     if (this.mockMode) {
       logger.info(`Mock KRNL call: ${method}`, params);
       return {
@@ -362,6 +399,12 @@ class KRNLService {
           'Authorization': `Bearer ${process.env.KRNL_API_KEY}`
         },
         timeout: 30000
+      });
+
+      logger.info('KRNL node call succeeded', {
+        method,
+        sessionId: params && params.sessionId,
+        status: response.data && response.data.status
       });
 
       return response.data;

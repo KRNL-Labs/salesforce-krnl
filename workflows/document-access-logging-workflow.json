@@ -5,7 +5,7 @@
   "attestor": "{{ENV.ATTESTOR_ADDRESS}}",
   "target": {
     "contract": "{{ENV.DOCUMENT_REGISTRY_CONTRACT}}",
-    "function": "logDocumentAccess(string,string,string,string,string)",
+    "function": "logDocumentAccessKRNL((uint256,uint256,bytes32,(bytes32,bytes,bytes)[],bytes,bool,bytes))",
     "authData_result": "${prepare-access-log.result}",
     "parameters": []
   },

@@ -16,6 +16,13 @@ router.post('/', async (req, res) => {
   try {
     const { recordId, fileId, docHash, callbackUrl } = req.body;
 
+    logger.debug('Incoming compliance request', {
+      recordId,
+      fileId,
+      hasDocHash: !!docHash,
+      hasCallbackUrl: !!callbackUrl
+    });
+
     // Validate required fields
     if (!recordId || !fileId || !docHash) {
       return res.status(400).json({
@@ -23,7 +30,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    logger.info(`Starting compliance check for record ${recordId}, file ${fileId}`);
+    logger.info('Starting compliance check', { recordId, fileId });
 
     // Start KRNL compliance workflow
     const workflowResult = await krnlService.startComplianceWorkflow({
@@ -61,7 +68,14 @@ router.get('/status/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
 
+    logger.info('Compliance status requested', { sessionId });
+
     const status = await krnlService.getWorkflowStatus(sessionId);
+
+    logger.info('Compliance status result', {
+      sessionId,
+      state: status.state
+    });
 
     res.json({
       sessionId,

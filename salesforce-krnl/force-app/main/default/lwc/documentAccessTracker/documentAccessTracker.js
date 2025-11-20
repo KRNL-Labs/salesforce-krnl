@@ -1,5 +1,15 @@
 import { LightningElement, track, api } from 'lwc';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
+import getDocuments from '@salesforce/apex/DocumentAccessController.getDocuments';
+import getDocumentAccessLogs from '@salesforce/apex/DocumentAccessController.getDocumentAccessLogs';
+import getComplianceStats from '@salesforce/apex/DocumentAccessController.getComplianceStats';
+import getBlockchainDocumentStatus from '@salesforce/apex/DocumentAccessController.getBlockchainDocumentStatus';
+import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
+import logDocumentAccess from '@salesforce/apex/DocumentAccessLogger.logDocumentAccess';
+import registerDocumentOnBlockchain from '@salesforce/apex/DocumentAccessLogger.registerDocumentOnBlockchain';
+import validateDocumentIntegrityApex from '@salesforce/apex/DocumentAccessLogger.validateDocumentIntegrity';
+import generateHashForContentDocument from '@salesforce/apex/DocumentHashUtil.generateHashForContentDocument';
+import USER_ID from '@salesforce/user/Id';
 
 export default class DocumentAccessTracker extends LightningElement {
     @api recordId; // Current record ID if used in record page
@@ -107,17 +117,46 @@ export default class DocumentAccessTracker extends LightningElement {
 
     // Lifecycle hook
     connectedCallback() {
-        console.log('DocumentAccessTracker connected - Local Development Mode');
+        console.log('DocumentAccessTracker connected');
+        this.initializeData();
+    }
 
-        // Initialize with mock data
-        this.documentOptions = this.mockDocuments;
-        this.complianceStats = this.mockComplianceStats;
-        this.accessLogs = this.mockAccessLogs;
+    async initializeData() {
+        this.isProcessing = true;
+        try {
+            const [documents, stats, recentActivity] = await Promise.all([
+                getDocuments(),
+                getComplianceStats(),
+                getRecentActivity({ limitCount: 20 })
+            ]);
 
-        // Simulate some processing delay
-        setTimeout(() => {
+            this.documentOptions = (documents || []).map((doc) => ({
+                ...doc,
+                label: doc.title,
+                value: doc.id
+            }));
+
+            this.complianceStats = stats || {};
+
+            this.accessLogs = (recentActivity || []).map((log) => ({
+                id: log.id,
+                accessTimestamp: log.accessTimestamp,
+                accessType: log.accessType,
+                userName: log.userName,
+                status: log.status,
+                blockchainStatus: log.blockchainStatus,
+                blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
+            }));
+        } catch (error) {
+            // Fallback to mock data in case of errors (local development)
+            // eslint-disable-next-line no-console
+            console.error('Failed to initialize DocumentAccessTracker data, falling back to mocks', error);
+            this.documentOptions = this.mockDocuments;
+            this.complianceStats = this.mockComplianceStats;
+            this.accessLogs = this.mockAccessLogs;
+        } finally {
             this.isProcessing = false;
-        }, 1000);
+        }
     }
 
     // Computed properties
@@ -161,20 +200,41 @@ export default class DocumentAccessTracker extends LightningElement {
         if (this.selectedDocumentId) {
             this.isProcessing = true;
 
-            // Find selected document details
-            this.selectedDocument = this.mockDocuments.find(doc => doc.id === this.selectedDocumentId);
+            try {
+                this.selectedDocument = (this.documentOptions || []).find(
+                    (doc) => doc.id === this.selectedDocumentId
+                );
 
-            // Simulate hash generation
-            setTimeout(() => {
-                this.documentHash = this.generateMockHash(this.selectedDocument.title);
-                this.blockchainStatus = Math.random() > 0.3 ? 'Registered' : 'Not Registered';
-                this.isProcessing = false;
+                const [hash, blockchainDoc, logs] = await Promise.all([
+                    generateHashForContentDocument({ contentDocumentId: this.selectedDocumentId }),
+                    getBlockchainDocumentStatus({ documentId: this.selectedDocumentId }),
+                    getDocumentAccessLogs({ documentId: this.selectedDocumentId })
+                ]);
 
-                // Filter access logs for this document (simulate)
-                this.accessLogs = this.mockAccessLogs.slice(0, Math.floor(Math.random() * 3) + 1);
+                this.documentHash = hash;
+                this.blockchainStatus =
+                    blockchainDoc && blockchainDoc.blockchainStatus
+                        ? blockchainDoc.blockchainStatus
+                        : 'Not Registered';
+
+                this.accessLogs = (logs || []).map((log) => ({
+                    id: log.id,
+                    accessTimestamp: log.accessTimestamp,
+                    accessType: log.accessType,
+                    userName: log.userName,
+                    status: log.status,
+                    blockchainStatus: log.blockchainStatus,
+                    blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
+                }));
 
                 this.showToast('Success', 'Document loaded successfully', 'success');
-            }, 1500);
+            } catch (error) {
+                // eslint-disable-next-line no-console
+                console.error('Failed to load document data', error);
+                this.showToast('Error', 'Failed to load document data', 'error');
+            } finally {
+                this.isProcessing = false;
+            }
         } else {
             this.selectedDocument = null;
             this.documentHash = '';
@@ -196,31 +256,67 @@ export default class DocumentAccessTracker extends LightningElement {
     }
 
     async handleRegisterBlockchain() {
-        this.isProcessing = true;
+        if (!this.selectedDocumentId) {
+            this.showToast('Error', 'Please select a document before registering on blockchain', 'error');
+            return;
+        }
 
-        // Simulate blockchain registration
-        setTimeout(() => {
-            this.blockchainStatus = 'Registered';
-            this.complianceStats.blockchainRegistered += 1;
+        this.isProcessing = true;
+        try {
+            await registerDocumentOnBlockchain({ contentDocumentId: this.selectedDocumentId });
+
+            const blockchainDoc = await getBlockchainDocumentStatus({
+                documentId: this.selectedDocumentId
+            });
+
+            this.blockchainStatus =
+                blockchainDoc && blockchainDoc.blockchainStatus
+                    ? blockchainDoc.blockchainStatus
+                    : 'Registered';
+
+            // Refresh compliance stats to keep dashboard in sync
+            const stats = await getComplianceStats();
+            this.complianceStats = stats || this.complianceStats;
+
+            this.showToast(
+                'Success',
+                'Document registered on blockchain and status updated',
+                'success'
+            );
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('Failed to register document on blockchain', error);
+            this.showToast('Error', 'Failed to register document on blockchain', 'error');
+        } finally {
             this.isProcessing = false;
-            this.showToast('Success', 'Document registered on blockchain (simulated)', 'success');
-        }, 3000);
+        }
     }
 
     async handleValidateIntegrity() {
-        this.isProcessing = true;
+        if (!this.selectedDocumentId) {
+            this.showToast('Error', 'Please select a document before validating integrity', 'error');
+            return;
+        }
 
-        // Simulate integrity validation
-        setTimeout(() => {
-            const isValid = Math.random() > 0.1; // 90% success rate
-            const message = isValid ?
-                'Document integrity validated successfully' :
-                'Document integrity validation failed';
+        this.isProcessing = true;
+        try {
+            const isValid = await validateDocumentIntegrityApex({
+                contentDocumentId: this.selectedDocumentId
+            });
+
+            const message = isValid
+                ? 'Document integrity validated successfully'
+                : 'Document integrity validation failed';
             const variant = isValid ? 'success' : 'error';
 
             this.showToast(isValid ? 'Success' : 'Error', message, variant);
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('Document integrity validation failed', error);
+            this.showToast('Error', 'Document integrity validation failed', 'error');
+        } finally {
             this.isProcessing = false;
-        }, 2000);
+        }
     }
 
     handleUploadDocument() {
@@ -231,56 +327,110 @@ export default class DocumentAccessTracker extends LightningElement {
         this.showUploadModal = false;
     }
 
-    handleUploadFinished() {
+    handleUploadFinished(event) {
         this.showUploadModal = false;
-        this.showToast('Success', 'File upload would work in real environment', 'success');
 
-        // Simulate adding a new document
-        const newDoc = {
-            id: '069' + Date.now(),
-            title: 'Uploaded Document.pdf',
-            fileType: 'PDF',
-            contentSize: 1234567,
-            label: 'Uploaded Document.pdf',
-            value: '069' + Date.now()
+        const uploadedFiles = (event && event.detail && event.detail.files) ? event.detail.files : [];
+
+        if (!uploadedFiles.length) {
+            this.showToast('Error', 'No files were uploaded', 'error');
+            return;
+        }
+
+        const newDocs = uploadedFiles.map((file) => ({
+            id: file.documentId,
+            title: file.name,
+            fileType: 'Uploaded',
+            contentSize: 0,
+            label: file.name,
+            value: file.documentId
+        }));
+
+        this.documentOptions = [...this.documentOptions, ...newDocs];
+
+        const addedCount = newDocs.length;
+        const currentTotal = this.complianceStats.totalDocuments || 0;
+        this.complianceStats = {
+            ...this.complianceStats,
+            totalDocuments: currentTotal + addedCount
         };
 
-        this.documentOptions = [...this.documentOptions, newDoc];
-        this.complianceStats.totalDocuments += 1;
+        this.showToast(
+            'Success',
+            `${addedCount} file${addedCount > 1 ? 's' : ''} uploaded successfully`,
+            'success'
+        );
     }
 
     // Helper methods
     async logAndExecuteAccess(accessType, callback) {
+        if (!this.selectedDocumentId) {
+            this.showToast('Error', 'Please select a document first', 'error');
+            return;
+        }
+
         this.isProcessing = true;
+        try {
+            await logDocumentAccess({
+                contentDocumentId: this.selectedDocumentId,
+                accessType,
+                userId: USER_ID
+            });
 
-        // Simulate access logging
-        setTimeout(() => {
-            const newLog = {
-                id: 'log_' + Date.now(),
-                accessTimestamp: new Date(),
-                accessType: accessType,
-                userName: 'Current User (Demo)',
-                status: 'Completed',
-                blockchainStatus: 'Logged',
-                blockchainStatusClass: 'slds-text-color_success'
-            };
+            const [logs, stats] = await Promise.all([
+                getDocumentAccessLogs({ documentId: this.selectedDocumentId }),
+                getComplianceStats()
+            ]);
 
-            this.accessLogs = [newLog, ...this.accessLogs];
-            this.complianceStats.totalAccessEvents += 1;
+            this.accessLogs = (logs || []).map((log) => ({
+                id: log.id,
+                accessTimestamp: log.accessTimestamp,
+                accessType: log.accessType,
+                userName: log.userName,
+                status: log.status,
+                blockchainStatus: log.blockchainStatus,
+                blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
+            }));
+
+            this.complianceStats = stats || this.complianceStats;
 
             if (callback && typeof callback === 'function') {
                 callback();
             }
 
+            this.showToast(
+                'Success',
+                `Document ${accessType} logged successfully`,
+                'success'
+            );
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('Failed to log document access', error);
+            this.showToast('Error', 'Failed to log document access', 'error');
+        } finally {
             this.isProcessing = false;
-            this.showToast('Success', `Document ${accessType} logged successfully`, 'success');
-        }, 1000);
+        }
     }
 
     generateMockHash(title) {
         // Generate a mock hash based on title
         const hash = btoa(title + Date.now()).replace(/[^a-zA-Z0-9]/g, '').substring(0, 64);
         return '0x' + hash.toLowerCase().padEnd(64, '0');
+    }
+
+    getBlockchainStatusClass(status) {
+        switch (status) {
+            case 'Logged to Blockchain':
+            case 'Registered':
+                return 'slds-text-color_success';
+            case 'Blockchain Error':
+            case 'Registration Failed':
+                return 'slds-text-color_error';
+            case 'Pending':
+                return 'slds-text-color_warning';
+            default:
+                return '';
+        }
     }
 
     showToast(title, message, variant) {

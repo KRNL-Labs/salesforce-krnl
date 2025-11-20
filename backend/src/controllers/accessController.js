@@ -22,6 +22,15 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       userAgent
     } = req.body;
 
+    logger.debug('Incoming access log request', {
+      documentHash,
+      recordId,
+      userId,
+      accessType,
+      clientIP: clientIP || req.ip,
+      userAgent: userAgent || req.get('User-Agent')
+    });
+
     // Validate required fields
     if (!documentHash || !recordId || !userId || !accessType) {
       return res.status(400).json({
@@ -41,7 +50,13 @@ router.post('/', validateSalesforceToken, async (req, res) => {
 
     const sessionId = `access_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    logger.info(`Logging document access: ${documentHash} by ${userId}, type: ${accessType}`);
+    logger.info('Logging document access', {
+      documentHash,
+      recordId,
+      userId,
+      accessType,
+      sessionId
+    });
 
     // Start KRNL access logging workflow
     const workflowResult = await krnlService.startAccessWorkflow({
@@ -51,6 +66,12 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       sessionId,
       clientIP: clientIP || req.ip,
       userAgent: userAgent || req.get('User-Agent')
+    });
+
+    logger.info('KRNL access workflow started', {
+      sessionId,
+      workflowId: workflowResult.workflowId,
+      status: workflowResult.status
     });
 
     // Generate time-limited access token for document viewer
@@ -90,6 +111,12 @@ router.get('/history/:documentHash', validateSalesforceToken, async (req, res) =
   try {
     const { documentHash } = req.params;
     const { limit = 50, offset = 0 } = req.query;
+
+    logger.info('Access history requested', {
+      documentHash,
+      limit,
+      offset
+    });
 
     // Mock access history (in production, query from database/blockchain)
     const accessHistory = [
@@ -147,6 +174,8 @@ router.get('/history/:documentHash', validateSalesforceToken, async (req, res) =
 router.get('/session/:sessionId', validateSalesforceToken, async (req, res) => {
   try {
     const { sessionId } = req.params;
+
+    logger.info('Access session status requested', { sessionId });
 
     const sessionStatus = await krnlService.getWorkflowStatus(sessionId);
 

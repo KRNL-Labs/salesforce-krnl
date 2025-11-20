@@ -44,14 +44,14 @@ public with sharing class DocumentAccessController {
 
     /**
      * @description Get access logs for a specific document
-     * @param documentId ContentDocument ID
+     * @param documentId ContentDocument ID (passed as String from LWC)
      * @return List<AccessLogWrapper> List of access log entries
      */
     @AuraEnabled(cacheable=true)
-    public static List<AccessLogWrapper> getDocumentAccessLogs(Id documentId) {
+    public static List<AccessLogWrapper> getDocumentAccessLogs(String documentId) {
         List<AccessLogWrapper> logWrappers = new List<AccessLogWrapper>();
 
-        if (documentId == null) {
+        if (String.isBlank(documentId)) {
             return logWrappers;
         }
 
@@ -159,14 +159,14 @@ public with sharing class DocumentAccessController {
 
     /**
      * @description Get blockchain document status for a specific document
-     * @param documentId ContentDocument ID
+     * @param documentId ContentDocument ID (passed as String from LWC)
      * @return BlockchainDocumentWrapper Blockchain document information
      */
     @AuraEnabled(cacheable=true)
-    public static BlockchainDocumentWrapper getBlockchainDocumentStatus(Id documentId) {
+    public static BlockchainDocumentWrapper getBlockchainDocumentStatus(String documentId) {
         BlockchainDocumentWrapper wrapper = new BlockchainDocumentWrapper();
 
-        if (documentId == null) {
+        if (String.isBlank(documentId)) {
             return wrapper;
         }
 
@@ -269,6 +269,7 @@ public with sharing class DocumentAccessController {
             List<Document_Access_Log__c> logs = [
                 SELECT Id, Name, Document_ID__c, Document_Hash__c, Access_Type__c,
                        User_ID__c, Access_Timestamp__c, Status__c,
+                       Blockchain_Response__c, Error_Message__c,
                        CreatedBy.Name
                 FROM Document_Access_Log__c
                 ORDER BY Access_Timestamp__c DESC

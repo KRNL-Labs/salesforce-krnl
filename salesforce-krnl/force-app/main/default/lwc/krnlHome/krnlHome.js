@@ -1,38 +1,15 @@
 import { LightningElement, track } from 'lwc';
+import getComplianceStats from '@salesforce/apex/DocumentAccessController.getComplianceStats';
+import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
 
 export default class KrnlHome extends LightningElement {
     @track stats = {
-        totalDocuments: 150,
-        blockchainRegistered: 135,
-        totalAccessEvents: 1247
+        totalDocuments: 0,
+        blockchainRegistered: 0,
+        totalAccessEvents: 0
     };
 
-    @track recentAccessLogs = [
-        {
-            id: 'log_001',
-            timestamp: new Date(Date.now() - 3600000),
-            documentName: 'Sample Contract.pdf',
-            accessType: 'view',
-            userName: 'John Doe',
-            status: 'Completed'
-        },
-        {
-            id: 'log_002',
-            timestamp: new Date(Date.now() - 7200000),
-            documentName: 'Legal Document.docx',
-            accessType: 'download',
-            userName: 'Jane Smith',
-            status: 'Completed'
-        },
-        {
-            id: 'log_003',
-            timestamp: new Date(Date.now() - 86400000),
-            documentName: 'Compliance Report.xlsx',
-            accessType: 'view',
-            userName: 'Bob Johnson',
-            status: 'Completed'
-        }
-    ];
+    @track recentAccessLogs = [];
 
     accessLogColumns = [
         {
@@ -52,6 +29,33 @@ export default class KrnlHome extends LightningElement {
         { label: 'User', fieldName: 'userName', type: 'text' },
         { label: 'Status', fieldName: 'status', type: 'text' }
     ];
+
+    connectedCallback() {
+        this.initializeData();
+    }
+
+    async initializeData() {
+        try {
+            const [stats, recent] = await Promise.all([
+                getComplianceStats(),
+                getRecentActivity({ limitCount: 20 })
+            ]);
+
+            this.stats = stats || this.stats;
+
+            this.recentAccessLogs = (recent || []).map((log) => ({
+                id: log.id,
+                timestamp: log.accessTimestamp,
+                documentName: log.documentId,
+                accessType: log.accessType,
+                userName: log.userName,
+                status: log.status
+            }));
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('Failed to initialize KRNL Home data', error);
+        }
+    }
 
     get totalDocuments() {
         return this.stats.totalDocuments || 0;

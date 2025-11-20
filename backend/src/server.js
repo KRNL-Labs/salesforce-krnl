@@ -3,6 +3,9 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const crypto = require('crypto');
+const { logger } = require('./utils/logger');
+const complianceRouter = require('./controllers/complianceController');
+const accessRouter = require('./controllers/accessController');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,9 +18,17 @@ app.use(express.urlencoded({ extended: true }));
 
 // Logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - ${req.ip}`);
+  logger.info('Incoming HTTP request', {
+    method: req.method,
+    path: req.path,
+    ip: req.ip
+  });
   next();
 });
+
+// KRNL API routers (Salesforce integrations)
+app.use('/api/compliance', complianceRouter);
+app.use('/api/access', accessRouter);
 
 // Health check
 app.get('/health', (req, res) => {

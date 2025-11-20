@@ -4,13 +4,14 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
+import "./TargetBase.sol";
 
 /**
  * @title DocumentAccessRegistry
  * @dev Smart contract for logging document access and maintaining compliance records
  * Integrates with Salesforce KRNL system for document access tracking
  */
-contract DocumentAccessRegistry is AccessControl, ReentrancyGuard, Pausable {
+contract DocumentAccessRegistry is TargetBase, AccessControl, ReentrancyGuard, Pausable {
     bytes32 public constant COMPLIANCE_OFFICER_ROLE = keccak256("COMPLIANCE_OFFICER_ROLE");
     bytes32 public constant DOCUMENT_MANAGER_ROLE = keccak256("DOCUMENT_MANAGER_ROLE");
 
@@ -29,6 +30,20 @@ contract DocumentAccessRegistry is AccessControl, ReentrancyGuard, Pausable {
         string salesforceUserId;
         uint256 accessTimestamp;
         string accessType; // "view", "download", "modify"
+        string ipAddress;
+        string userAgent;
+    }
+
+    struct DocumentRegistrationParams {
+        string documentHash;
+        string salesforceRecordId;
+        string metadata;
+    }
+
+    struct DocumentAccessParams {
+        string documentHash;
+        string salesforceUserId;
+        string accessType;
         string ipAddress;
         string userAgent;
     }
@@ -69,7 +84,12 @@ contract DocumentAccessRegistry is AccessControl, ReentrancyGuard, Pausable {
         uint256 timestamp
     );
 
-    constructor(address _admin) {
+    constructor(
+        address _admin,
+        address _authKey,
+        address _recoveryKey,
+        address _owner
+    ) TargetBase(_authKey, _recoveryKey, _owner) {
         _grantRole(DEFAULT_ADMIN_ROLE, _admin);
         _grantRole(COMPLIANCE_OFFICER_ROLE, _admin);
         _grantRole(DOCUMENT_MANAGER_ROLE, _admin);
@@ -81,11 +101,22 @@ contract DocumentAccessRegistry is AccessControl, ReentrancyGuard, Pausable {
      * @param _salesforceRecordId Salesforce record ID for the document
      * @param _metadata JSON metadata about the document
      */
-    function registerDocument(
+    function registerDocumentKRNL(
+        AuthData calldata authData
+    ) external requireAuth(authData) whenNotPaused {
+        DocumentRegistrationParams memory params = abi.decode(
+            authData.result,
+            (DocumentRegistrationParams)
+        );
+
+        _registerDocument(params.documentHash, params.salesforceRecordId, params.metadata);
+    }
+
+    function _registerDocument(
         string memory _documentHash,
         string memory _salesforceRecordId,
         string memory _metadata
-    ) external onlyRole(DOCUMENT_MANAGER_ROLE) whenNotPaused {
+    ) internal {
         require(bytes(_documentHash).length > 0, "Document hash cannot be empty");
         require(bytes(_salesforceRecordId).length > 0, "Salesforce record ID cannot be empty");
         require(!documentExists(_documentHash), "Document already registered");
@@ -112,13 +143,30 @@ contract DocumentAccessRegistry is AccessControl, ReentrancyGuard, Pausable {
      * @param _ipAddress IP address of the accessor
      * @param _userAgent User agent of the accessor
      */
-    function logDocumentAccess(
+    function logDocumentAccessKRNL(
+        AuthData calldata authData
+    ) external requireAuth(authData) whenNotPaused {
+        DocumentAccessParams memory params = abi.decode(
+            authData.result,
+            (DocumentAccessParams)
+        );
+
+        _logDocumentAccess(
+            params.documentHash,
+            params.salesforceUserId,
+            params.accessType,
+            params.ipAddress,
+            params.userAgent
+        );
+    }
+
+    function _logDocumentAccess(
         string memory _documentHash,
         string memory _salesforceUserId,
         string memory _accessType,
         string memory _ipAddress,
         string memory _userAgent
-    ) external whenNotPaused {
+    ) internal {
         require(documentExists(_documentHash), "Document not registered");
         require(documents[_documentHash].isActive, "Document is not active");
         require(

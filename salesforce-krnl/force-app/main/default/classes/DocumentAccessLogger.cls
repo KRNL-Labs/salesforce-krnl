@@ -205,13 +205,25 @@ public with sharing class DocumentAccessLogger {
 
         public void execute(QueueableContext context) {
             try {
-                // Call blockchain API to log access
-                String result = callBlockchainAPI('logAccess', new Map<String, Object>{
+                // Load access log to enrich payload for KRNL backend
+                Document_Access_Log__c accessLogRecord = [
+                    SELECT Document_ID__c, IP_Address__c, User_Agent__c
+                    FROM Document_Access_Log__c
+                    WHERE Id = :accessLogId
+                    LIMIT 1
+                ];
+
+                // Call KRNL backend /api/access via callout
+                Map<String, Object> payload = new Map<String, Object>{
                     'documentHash' => documentHash,
+                    'recordId' => (String)accessLogRecord.Document_ID__c,
+                    'userId' => (String)userId,
                     'accessType' => accessType,
-                    'userId' => userId,
-                    'timestamp' => Datetime.now().format('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'')
-                });
+                    'clientIP' => accessLogRecord.IP_Address__c,
+                    'userAgent' => accessLogRecord.User_Agent__c
+                };
+
+                String result = callBlockchainAPI('logAccess', payload);
 
                 // Update access log status
                 Document_Access_Log__c accessLog = new Document_Access_Log__c(
@@ -249,12 +261,15 @@ public with sharing class DocumentAccessLogger {
 
         public void execute(QueueableContext context) {
             try {
-                // Call blockchain API to register document
-                String result = callBlockchainAPI('registerDocument', new Map<String, Object>{
-                    'documentHash' => documentHash,
-                    'salesforceRecordId' => (String)metadata.get('salesforceId'),
-                    'metadata' => JSON.serialize(metadata)
-                });
+                // Prepare payload for KRNL backend /api/compliance
+                String salesforceRecordId = (String)metadata.get('salesforceId');
+                Map<String, Object> payload = new Map<String, Object>{
+                    'recordId' => salesforceRecordId,
+                    'fileId' => salesforceRecordId,
+                    'docHash' => documentHash
+                };
+
+                String result = callBlockchainAPI('registerDocument', payload);
 
                 // Update blockchain document status
                 Blockchain_Document__c blockchainDoc = new Blockchain_Document__c(
@@ -291,12 +306,14 @@ public with sharing class DocumentAccessLogger {
 
             for (Blockchain_Document__c doc : blockchainDocs) {
                 try {
-                    // Call blockchain API for each document
-                    String result = callBlockchainAPI('registerDocument', new Map<String, Object>{
-                        'documentHash' => doc.Document_Hash__c,
-                        'salesforceRecordId' => doc.Document_ID__c,
-                        'metadata' => doc.Metadata__c
-                    });
+                    // Call KRNL backend /api/compliance for each document
+                    Map<String, Object> payload = new Map<String, Object>{
+                        'recordId' => (String)doc.Document_ID__c,
+                        'fileId' => (String)doc.Document_ID__c,
+                        'docHash' => doc.Document_Hash__c
+                    };
+
+                    String result = callBlockchainAPI('registerDocument', payload);
 
                     doc.Blockchain_Status__c = 'Registered';
                     doc.Blockchain_Response__c = result;
@@ -322,13 +339,36 @@ public with sharing class DocumentAccessLogger {
      * @return String API response
      */
     private static String callBlockchainAPI(String operation, Map<String, Object> parameters) {
-        // This would integrate with your actual blockchain API endpoint
-        // For now, return a mock response
-        return JSON.serialize(new Map<String, Object>{
-            'success' => true,
-            'operation' => operation,
-            'timestamp' => Datetime.now().format('yyyy-MM-dd\'T\'HH:mm:ss\'Z\''),
-            'transactionHash' => '0x' + EncodingUtil.convertToHex(Crypto.generateDigest('SHA-256', Blob.valueOf(JSON.serialize(parameters))))
-        });
+        HttpRequest req = new HttpRequest();
+        Http http = new Http();
+
+        // Determine target endpoint based on operation
+        String baseEndpoint = 'callout:' + BLOCKCHAIN_ENDPOINT;
+        if (operation == 'logAccess') {
+            req.setEndpoint(baseEndpoint + '/api/access');
+        } else if (operation == 'registerDocument') {
+            req.setEndpoint(baseEndpoint + '/api/compliance');
+        } else {
+            throw new DocumentAccessException('Unsupported blockchain operation: ' + operation);
+        }
+
+        req.setMethod('POST');
+        req.setHeader('Content-Type', 'application/json');
+        req.setHeader('Accept', 'application/json');
+        // Provide Salesforce token for backend middleware if required
+        req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+        req.setTimeout(120000);
+        req.setBody(JSON.serialize(parameters));
+
+        HTTPResponse res = http.send(req);
+        Integer status = res.getStatusCode();
+
+        if (status >= 200 && status < 300) {
+            return res.getBody();
+        }
+
+        throw new DocumentAccessException(
+            'KRNL backend call failed (' + status + '): ' + res.getBody()
+        );
     }
 }
