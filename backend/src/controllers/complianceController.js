@@ -43,12 +43,22 @@ router.post('/', async (req, res) => {
     // Store workflow session
     const sessionId = workflowResult.sessionId;
 
-    // Return immediate response with session info
-    res.status(202).json({
-      status: 'accepted',
+    // Option 2: block and wait for KRNL workflow completion before responding
+    logger.info('Waiting for compliance workflow to complete', { sessionId });
+    const status = await krnlService.getWorkflowStatus(sessionId);
+
+    logger.info('Compliance workflow completed', {
       sessionId,
-      message: 'Compliance check initiated',
-      statusUrl: `/api/compliance/status/${sessionId}`
+      state: status.state
+    });
+
+    res.status(200).json({
+      sessionId,
+      status: status.state,
+      result: status.result,
+      txHash: status.txHash,
+      timestamp: status.timestamp,
+      debug: status.debug
     });
 
   } catch (error) {
@@ -82,7 +92,8 @@ router.get('/status/:sessionId', async (req, res) => {
       status: status.state,
       result: status.result,
       txHash: status.txHash,
-      timestamp: status.timestamp
+      timestamp: status.timestamp,
+      debug: status.debug
     });
 
   } catch (error) {

@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 const { logger } = require('../utils/logger');
 
 /**
@@ -54,8 +55,13 @@ const validateSalesforceToken = async (req, res, next) => {
   try {
     // In production, validate against Salesforce
     // This would involve calling Salesforce API to validate the session
-    const userInfo = await validateWithSalesforce(salesforceToken);
+    const instanceUrlHeader = req.header('X-Salesforce-Instance-Url');
+    const userInfo = await validateWithSalesforce(salesforceToken, instanceUrlHeader);
     req.user = userInfo;
+    // Attach tenant context for multi-tenant scenarios based on Salesforce org
+    if (userInfo && userInfo.orgId) {
+      req.tenant = { orgId: userInfo.orgId };
+    }
     next();
   } catch (error) {
     logger.error('Salesforce validation failed:', error);
@@ -69,14 +75,31 @@ const validateSalesforceToken = async (req, res, next) => {
 /**
  * Mock Salesforce validation for testing
  */
-async function validateWithSalesforce(token) {
-  // This would make an actual call to Salesforce in production
-  // For now, return mock user data
+async function validateWithSalesforce(token, instanceUrlFromHeader) {
+  const baseUrl = instanceUrlFromHeader || process.env.SALESFORCE_INSTANCE_URL;
+  const apiVersion = process.env.SALESFORCE_API_VERSION || 'v60.0';
+
+  if (!baseUrl) {
+    throw new Error('SALESFORCE_INSTANCE_URL is not configured and no X-Salesforce-Instance-Url header was provided');
+  }
+
+  const url = `${baseUrl}/services/data/${apiVersion}/chatter/users/me`;
+
+  const response = await axios.get(url, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    timeout: 5000
+  });
+
+  const data = response.data || {};
+
   return {
-    id: 'sf_user_001',
-    email: 'user@company.com',
-    salesforceId: '0051234567890123',
-    orgId: 'production_org'
+    id: data.id || null,
+    email: data.email || null,
+    salesforceId: data.id || null,
+    orgId: data.organizationId || null,
+    instanceUrl: baseUrl
   };
 }
 

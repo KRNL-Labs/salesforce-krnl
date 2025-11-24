@@ -1,92 +1,43 @@
 import { LightningElement, track, api } from 'lwc';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
-import getDocuments from '@salesforce/apex/DocumentAccessController.getDocuments';
-import getDocumentAccessLogs from '@salesforce/apex/DocumentAccessController.getDocumentAccessLogs';
 import getComplianceStats from '@salesforce/apex/DocumentAccessController.getComplianceStats';
-import getBlockchainDocumentStatus from '@salesforce/apex/DocumentAccessController.getBlockchainDocumentStatus';
 import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
-import logDocumentAccess from '@salesforce/apex/DocumentAccessLogger.logDocumentAccess';
+import getUploadsForRecord from '@salesforce/apex/DocumentAccessController.getUploadsForRecord';
+import getViewerUrl from '@salesforce/apex/DocumentAccessLogger.getViewerUrl';
 import registerDocumentOnBlockchain from '@salesforce/apex/DocumentAccessLogger.registerDocumentOnBlockchain';
-import validateDocumentIntegrityApex from '@salesforce/apex/DocumentAccessLogger.validateDocumentIntegrity';
-import generateHashForContentDocument from '@salesforce/apex/DocumentHashUtil.generateHashForContentDocument';
-import USER_ID from '@salesforce/user/Id';
 
 export default class DocumentAccessTracker extends LightningElement {
     @api recordId; // Current record ID if used in record page
 
-    @track documentOptions = [];
-    @track selectedDocumentId = '';
-    @track selectedDocument = null;
-    @track documentHash = '';
-    @track blockchainStatus = 'Not Registered';
-    @track accessLogs = [];
     @track complianceStats = {};
     @track isProcessing = false;
-    @track showUploadModal = false;
+    @track uploads = [];
 
-    // Mock data for local development
-    mockDocuments = [
+    uploadColumns = [
+        { label: 'File Name', fieldName: 'fileName', type: 'text' },
+        { label: 'Hash', fieldName: 'documentHash', type: 'text' },
+        { label: 'Status', fieldName: 'blockchainStatus', type: 'text' },
         {
-            id: '0691234567890123',
-            title: 'Sample Contract.pdf',
-            fileType: 'PDF',
-            contentSize: 1024576,
-            label: 'Sample Contract.pdf',
-            value: '0691234567890123'
+            label: 'Uploaded At',
+            fieldName: 'registrationTimestamp',
+            type: 'date',
+            typeAttributes: {
+                year: 'numeric',
+                month: 'short',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            }
         },
         {
-            id: '0691234567890124',
-            title: 'Legal Document.docx',
-            fileType: 'WORD',
-            contentSize: 2048576,
-            label: 'Legal Document.docx',
-            value: '0691234567890124'
-        },
-        {
-            id: '0691234567890125',
-            title: 'Compliance Report.xlsx',
-            fileType: 'EXCEL',
-            contentSize: 512288,
-            label: 'Compliance Report.xlsx',
-            value: '0691234567890125'
+            type: 'button',
+            typeAttributes: {
+                label: { fieldName: 'actionLabel' },
+                name: 'uploadAction',
+                variant: 'neutral'
+            }
         }
     ];
-
-    mockAccessLogs = [
-        {
-            id: 'log_001',
-            accessTimestamp: new Date(Date.now() - 3600000),
-            accessType: 'view',
-            userName: 'John Doe',
-            status: 'Completed',
-            blockchainStatus: 'Logged',
-            blockchainStatusClass: 'slds-text-color_success'
-        },
-        {
-            id: 'log_002',
-            accessTimestamp: new Date(Date.now() - 7200000),
-            accessType: 'download',
-            userName: 'Jane Smith',
-            status: 'Completed',
-            blockchainStatus: 'Logged',
-            blockchainStatusClass: 'slds-text-color_success'
-        },
-        {
-            id: 'log_003',
-            accessTimestamp: new Date(Date.now() - 86400000),
-            accessType: 'view',
-            userName: 'Bob Johnson',
-            status: 'Completed',
-            blockchainStatus: 'Pending',
-            blockchainStatusClass: 'slds-text-color_warning'
-        }
-    ];
-
-    mockComplianceStats = {
-        totalDocuments: 150,
-        blockchainRegistered: 135,
-        totalAccessEvents: 1247
-    };
 
     // Access log columns for datatable
     accessLogColumns = [
@@ -124,17 +75,27 @@ export default class DocumentAccessTracker extends LightningElement {
     async initializeData() {
         this.isProcessing = true;
         try {
-            const [documents, stats, recentActivity] = await Promise.all([
-                getDocuments(),
-                getComplianceStats(),
-                getRecentActivity({ limitCount: 20 })
-            ]);
+            // Load each data source independently so one failure doesn't break everything
+            const stats = await getComplianceStats().catch(error => {
+                // eslint-disable-next-line no-console
+                console.error('Failed to load compliance stats', error);
+                return {};
+            });
 
-            this.documentOptions = (documents || []).map((doc) => ({
-                ...doc,
-                label: doc.title,
-                value: doc.id
-            }));
+            const recentActivity = await getRecentActivity({ limitCount: 20 }).catch(error => {
+                // eslint-disable-next-line no-console
+                console.error('Failed to load recent activity', error);
+                return [];
+            });
+
+            let uploads = [];
+            if (this.recordId) {
+                uploads = await getUploadsForRecord({ recordId: this.recordId }).catch(error => {
+                    // eslint-disable-next-line no-console
+                    console.error('Failed to load uploads for record', error);
+                    return [];
+                });
+            }
 
             this.complianceStats = stats || {};
 
@@ -147,13 +108,12 @@ export default class DocumentAccessTracker extends LightningElement {
                 blockchainStatus: log.blockchainStatus,
                 blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
             }));
+
+            this.uploads = this.decorateUploads(uploads);
         } catch (error) {
-            // Fallback to mock data in case of errors (local development)
             // eslint-disable-next-line no-console
-            console.error('Failed to initialize DocumentAccessTracker data, falling back to mocks', error);
-            this.documentOptions = this.mockDocuments;
-            this.complianceStats = this.mockComplianceStats;
-            this.accessLogs = this.mockAccessLogs;
+            console.error('Failed to initialize DocumentAccessTracker data', error);
+            this.showToast('Error', 'Failed to load dashboard data', 'error');
         } finally {
             this.isProcessing = false;
         }
@@ -194,130 +154,7 @@ export default class DocumentAccessTracker extends LightningElement {
     }
 
     // Event handlers
-    async handleDocumentSelection(event) {
-        this.selectedDocumentId = event.detail.value;
-
-        if (this.selectedDocumentId) {
-            this.isProcessing = true;
-
-            try {
-                this.selectedDocument = (this.documentOptions || []).find(
-                    (doc) => doc.id === this.selectedDocumentId
-                );
-
-                const [hash, blockchainDoc, logs] = await Promise.all([
-                    generateHashForContentDocument({ contentDocumentId: this.selectedDocumentId }),
-                    getBlockchainDocumentStatus({ documentId: this.selectedDocumentId }),
-                    getDocumentAccessLogs({ documentId: this.selectedDocumentId })
-                ]);
-
-                this.documentHash = hash;
-                this.blockchainStatus =
-                    blockchainDoc && blockchainDoc.blockchainStatus
-                        ? blockchainDoc.blockchainStatus
-                        : 'Not Registered';
-
-                this.accessLogs = (logs || []).map((log) => ({
-                    id: log.id,
-                    accessTimestamp: log.accessTimestamp,
-                    accessType: log.accessType,
-                    userName: log.userName,
-                    status: log.status,
-                    blockchainStatus: log.blockchainStatus,
-                    blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
-                }));
-
-                this.showToast('Success', 'Document loaded successfully', 'success');
-            } catch (error) {
-                // eslint-disable-next-line no-console
-                console.error('Failed to load document data', error);
-                this.showToast('Error', 'Failed to load document data', 'error');
-            } finally {
-                this.isProcessing = false;
-            }
-        } else {
-            this.selectedDocument = null;
-            this.documentHash = '';
-            this.blockchainStatus = 'Not Registered';
-            this.accessLogs = [];
-        }
-    }
-
-    async handleViewDocument() {
-        await this.logAndExecuteAccess('view', () => {
-            this.showToast('Info', 'Document view would open in real environment', 'info');
-        });
-    }
-
-    async handleDownloadDocument() {
-        await this.logAndExecuteAccess('download', () => {
-            this.showToast('Info', 'Document download would start in real environment', 'info');
-        });
-    }
-
-    async handleRegisterBlockchain() {
-        if (!this.selectedDocumentId) {
-            this.showToast('Error', 'Please select a document before registering on blockchain', 'error');
-            return;
-        }
-
-        this.isProcessing = true;
-        try {
-            await registerDocumentOnBlockchain({ contentDocumentId: this.selectedDocumentId });
-
-            const blockchainDoc = await getBlockchainDocumentStatus({
-                documentId: this.selectedDocumentId
-            });
-
-            this.blockchainStatus =
-                blockchainDoc && blockchainDoc.blockchainStatus
-                    ? blockchainDoc.blockchainStatus
-                    : 'Registered';
-
-            // Refresh compliance stats to keep dashboard in sync
-            const stats = await getComplianceStats();
-            this.complianceStats = stats || this.complianceStats;
-
-            this.showToast(
-                'Success',
-                'Document registered on blockchain and status updated',
-                'success'
-            );
-        } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error('Failed to register document on blockchain', error);
-            this.showToast('Error', 'Failed to register document on blockchain', 'error');
-        } finally {
-            this.isProcessing = false;
-        }
-    }
-
-    async handleValidateIntegrity() {
-        if (!this.selectedDocumentId) {
-            this.showToast('Error', 'Please select a document before validating integrity', 'error');
-            return;
-        }
-
-        this.isProcessing = true;
-        try {
-            const isValid = await validateDocumentIntegrityApex({
-                contentDocumentId: this.selectedDocumentId
-            });
-
-            const message = isValid
-                ? 'Document integrity validated successfully'
-                : 'Document integrity validation failed';
-            const variant = isValid ? 'success' : 'error';
-
-            this.showToast(isValid ? 'Success' : 'Error', message, variant);
-        } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error('Document integrity validation failed', error);
-            this.showToast('Error', 'Document integrity validation failed', 'error');
-        } finally {
-            this.isProcessing = false;
-        }
-    }
+    // Document selection removed - auto-registration enabled
 
     handleUploadDocument() {
         this.showUploadModal = true;
@@ -362,60 +199,65 @@ export default class DocumentAccessTracker extends LightningElement {
         );
     }
 
-    // Helper methods
-    async logAndExecuteAccess(accessType, callback) {
-        if (!this.selectedDocumentId) {
-            this.showToast('Error', 'Please select a document first', 'error');
-            return;
-        }
+    async handleUploadSuccess(event) {
+        // Wait 2-3 seconds for backend to process and register document
+        const detail = event.detail || {};
+        // eslint-disable-next-line no-console
+        console.log('Direct upload success, waiting 3s before refresh', detail);
 
-        this.isProcessing = true;
-        try {
-            await logDocumentAccess({
-                contentDocumentId: this.selectedDocumentId,
-                accessType,
-                userId: USER_ID
-            });
+        // Show immediate feedback
+        this.showToast(
+            'Success',
+            'File uploaded! Registering on blockchain...',
+            'success'
+        );
 
-            const [logs, stats] = await Promise.all([
-                getDocumentAccessLogs({ documentId: this.selectedDocumentId }),
-                getComplianceStats()
-            ]);
+        // Wait 3 seconds to allow registration to complete
+        setTimeout(async () => {
+            try {
+                // Re-fetch compliance stats and uploads
+                const promises = [
+                    getComplianceStats()
+                ];
 
-            this.accessLogs = (logs || []).map((log) => ({
-                id: log.id,
-                accessTimestamp: log.accessTimestamp,
-                accessType: log.accessType,
-                userName: log.userName,
-                status: log.status,
-                blockchainStatus: log.blockchainStatus,
-                blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
-            }));
+                if (this.recordId) {
+                    promises.push(getUploadsForRecord({ recordId: this.recordId }));
+                }
 
-            this.complianceStats = stats || this.complianceStats;
+                const results = await Promise.all(promises);
 
-            if (callback && typeof callback === 'function') {
-                callback();
+                const stats = results[0];
+                const uploads = this.recordId && results.length > 1 ? results[1] : [];
+
+                // Update compliance stats
+                this.complianceStats = stats || this.complianceStats;
+
+                // Update uploads list
+                this.uploads = this.decorateUploads(uploads || []);
+
+                this.showToast(
+                    'Success',
+                    'Dashboard refreshed - check file status',
+                    'success'
+                );
+            } catch (error) {
+                // eslint-disable-next-line no-console
+                console.error('Failed to refresh after upload', error);
+                // Non-fatal: upload already succeeded, just refresh failed
             }
-
-            this.showToast(
-                'Success',
-                `Document ${accessType} logged successfully`,
-                'success'
-            );
-        } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error('Failed to log document access', error);
-            this.showToast('Error', 'Failed to log document access', 'error');
-        } finally {
-            this.isProcessing = false;
-        }
+        }, 3000); // Wait 3 seconds
     }
 
-    generateMockHash(title) {
-        // Generate a mock hash based on title
-        const hash = btoa(title + Date.now()).replace(/[^a-zA-Z0-9]/g, '').substring(0, 64);
-        return '0x' + hash.toLowerCase().padEnd(64, '0');
+    // Helper methods
+
+    decorateUploads(uploads) {
+        return (uploads || []).map((u) => {
+            const isRegistered = u.blockchainStatus === 'Registered';
+            return {
+                ...u,
+                actionLabel: isRegistered ? 'View / Download' : 'Register'
+            };
+        });
     }
 
     getBlockchainStatusClass(status) {
@@ -433,11 +275,91 @@ export default class DocumentAccessTracker extends LightningElement {
         }
     }
 
+    get hasUploadsForRecord() {
+        return this.uploads && this.uploads.length > 0;
+    }
+
+    async handleUploadRowAction(event) {
+        const action = event.detail.action;
+        const row = event.detail.row;
+
+        if (!action || !row || action.name !== 'uploadAction') {
+            return;
+        }
+
+        const isRegistered = row.blockchainStatus === 'Registered';
+
+        if (isRegistered) {
+            // View / Download for registered documents
+            if (!row.path) {
+                this.showToast('Error', 'No storage path available for this upload', 'error');
+                return;
+            }
+
+            const contextRecordId = this.recordId || row.documentId;
+
+            try {
+                const url = await getViewerUrl({ recordId: contextRecordId, path: row.path });
+
+                if (!url) {
+                    throw new Error('Backend did not return a viewer URL');
+                }
+
+                // eslint-disable-next-line no-undef
+                window.open(url, '_blank');
+            } catch (error) {
+                // eslint-disable-next-line no-console
+                console.error('Failed to open uploaded document', error);
+                this.showToast('Error', error.message || 'Failed to open uploaded document', 'error');
+            }
+        } else {
+            // Register for non-registered documents
+            if (!row.id) {
+                this.showToast('Error', 'Missing document ID for registration', 'error');
+                return;
+            }
+
+            this.isProcessing = true;
+            try {
+                await registerDocumentOnBlockchain({ blockchainDocId: row.id });
+
+                this.showToast(
+                    'Success',
+                    'Document registration queued. Refreshing status...',
+                    'success'
+                );
+
+                // Refresh uploads and stats after manual registration
+                const promises = [
+                    getComplianceStats()
+                ];
+
+                if (this.recordId) {
+                    promises.push(getUploadsForRecord({ recordId: this.recordId }));
+                }
+
+                const results = await Promise.all(promises);
+
+                const stats = results[0];
+                const uploads = this.recordId && results.length > 1 ? results[1] : [];
+
+                this.complianceStats = stats || this.complianceStats;
+                this.uploads = this.decorateUploads(uploads || []);
+            } catch (error) {
+                // eslint-disable-next-line no-console
+                console.error('Failed to register document from row action', error);
+                this.showToast('Error', 'Failed to register document on blockchain', 'error');
+            } finally {
+                this.isProcessing = false;
+            }
+        }
+    }
+
     showToast(title, message, variant) {
         const evt = new ShowToastEvent({
-            title: title,
-            message: message,
-            variant: variant
+            title,
+            message,
+            variant
         });
         this.dispatchEvent(evt);
     }

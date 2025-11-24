@@ -216,19 +216,19 @@
         "config": {
           "parameters": [
             {
-              "name": "documentHash",
-              "type": "string"
-            },
-            {
-              "name": "salesforceUserId",
-              "type": "string"
-            },
-            {
               "name": "accessType",
               "type": "string"
             },
             {
+              "name": "documentHash",
+              "type": "string"
+            },
+            {
               "name": "ipAddress",
+              "type": "string"
+            },
+            {
+              "name": "salesforceUserId",
               "type": "string"
             },
             {
@@ -238,10 +238,10 @@
           ]
         },
         "inputs": {
-          "documentHash": "${validate-document-exists.documentHash}",
-          "salesforceUserId": "${get-user-info.userId}",
           "accessType": "{{ACCESS_TYPE}}",
+          "documentHash": "${validate-document-exists.documentHash}",
           "ipAddress": "{{CLIENT_IP}}",
+          "salesforceUserId": "${get-user-info.userId}",
           "userAgent": "{{USER_AGENT}}"
         },
         "outputs": [

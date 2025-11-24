@@ -2,7 +2,6 @@
 pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "./TargetBase.sol";
 
@@ -11,7 +10,7 @@ import "./TargetBase.sol";
  * @dev Smart contract for logging document access and maintaining compliance records
  * Integrates with Salesforce KRNL system for document access tracking
  */
-contract DocumentAccessRegistry is TargetBase, AccessControl, ReentrancyGuard, Pausable {
+contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
     bytes32 public constant COMPLIANCE_OFFICER_ROLE = keccak256("COMPLIANCE_OFFICER_ROLE");
     bytes32 public constant DOCUMENT_MANAGER_ROLE = keccak256("DOCUMENT_MANAGER_ROLE");
 
@@ -36,15 +35,15 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, ReentrancyGuard, P
 
     struct DocumentRegistrationParams {
         string documentHash;
-        string salesforceRecordId;
         string metadata;
+        string salesforceRecordId;
     }
 
     struct DocumentAccessParams {
-        string documentHash;
-        string salesforceUserId;
         string accessType;
+        string documentHash;
         string ipAddress;
+        string salesforceUserId;
         string userAgent;
     }
 
@@ -110,6 +109,14 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, ReentrancyGuard, P
         );
 
         _registerDocument(params.documentHash, params.salesforceRecordId, params.metadata);
+    }
+
+    function registerDocumentDirect(
+        string memory _documentHash,
+        string memory _salesforceRecordId,
+        string memory _metadata
+    ) external whenNotPaused {
+        _registerDocument(_documentHash, _salesforceRecordId, _metadata);
     }
 
     function _registerDocument(

@@ -2,34 +2,35 @@
     <lightning-card title="KRNL Document Access & Compliance Tracker" icon-name="custom:custom63">
         <div class="slds-card__body slds-card__body_inner">
 
-            <!-- Document Selection Section -->
-            <div class="slds-section slds-is-open">
-                <h3 class="slds-section__title slds-theme_shade">
-                    <span class="slds-truncate slds-p-horizontal_small" title="Document Selection">Document Selection</span>
-                </h3>
-                <div class="slds-section__content">
-                    <div class="slds-grid slds-wrap slds-gutters">
-                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
-                            <lightning-combobox
-                                name="documentPicker"
-                                label="Select Document"
-                                value={selectedDocumentId}
-                                placeholder="Choose a document..."
-                                options={documentOptions}
-                                onchange={handleDocumentSelection}>
-                            </lightning-combobox>
-                        </div>
-                        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-2">
-                            <lightning-button
-                                label="Upload New Document"
-                                variant="brand"
-                                onclick={handleUploadDocument}
-                                class="slds-m-left_x-small">
-                            </lightning-button>
-                        </div>
+            <!-- Document Selection Section - Hidden: Auto-registration enabled -->
+            <!-- Documents are automatically registered on blockchain after upload -->
+
+            <!-- Uploaded Files for this Record -->
+            <template if:true={recordId}>
+                <div class="slds-section slds-is-open slds-m-top_medium">
+                    <h3 class="slds-section__title slds-theme_shade">
+                        <span class="slds-truncate slds-p-horizontal_small" title="Uploaded Files for this Record">Uploaded Files for this Record</span>
+                    </h3>
+                    <div class="slds-section__content">
+                        <template if:true={hasUploadsForRecord}>
+                            <lightning-datatable
+                                key-field="id"
+                                data={uploads}
+                                columns={uploadColumns}
+                                hide-checkbox-column="true"
+                                onrowaction={handleUploadRowAction}>
+                            </lightning-datatable>
+                        </template>
+                        <template if:false={hasUploadsForRecord}>
+                            <div class="slds-text-align_center slds-p-around_medium">
+                                <lightning-icon icon-name="custom:custom14" size="large" alternative-text="No uploads"></lightning-icon>
+                                <p class="slds-text-heading_small slds-m-top_small">No uploads for this record yet</p>
+                                <p class="slds-text-color_weak">Use the Direct Upload section above to add a document for this record.</p>
+                            </div>
+                        </template>
                     </div>
                 </div>
-            </div>
+            </template>
 
             <!-- Document Details Section -->
             <template if:true={selectedDocument}>
@@ -78,13 +79,7 @@
                                     onclick={handleDownloadDocument}
                                     disabled={isProcessing}>
                                 </lightning-button>
-                                <lightning-button
-                                    label="Register on Blockchain"
-                                    variant="brand"
-                                    onclick={handleRegisterBlockchain}
-                                    disabled={isBlockchainRegistered}
-                                    class={isBlockchainRegistered}>
-                                </lightning-button>
+                                <!-- Register on Blockchain button removed - Auto-registration enabled -->
                                 <lightning-button
                                     label="Validate Integrity"
                                     variant="success"
@@ -96,6 +91,16 @@
                     </div>
                 </div>
             </template>
+
+            <!-- Direct Upload to KRNL Backend Section -->
+            <div class="slds-section slds-is-open slds-m-top_medium">
+                <h3 class="slds-section__title slds-theme_shade">
+                    <span class="slds-truncate slds-p-horizontal_small" title="Direct Upload to KRNL Backend">Direct Upload to KRNL Backend</span>
+                </h3>
+                <div class="slds-section__content slds-p-around_small">
+                    <c-direct-upload-to-backend record-id={recordId} onuploadsuccess={handleUploadSuccess}></c-direct-upload-to-backend>
+                </div>
+            </div>
 
             <!-- Access Log Section -->
             <div class="slds-section slds-is-open slds-m-top_medium">
@@ -178,40 +183,5 @@
             <lightning-spinner alternative-text="Processing..." size="medium"></lightning-spinner>
         </template>
 
-        <!-- File Upload Modal -->
-        <template if:true={showUploadModal}>
-            <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
-                <div class="slds-modal__container">
-                    <header class="slds-modal__header">
-                        <lightning-button-icon
-                            icon-name="utility:close"
-                            onclick={handleCloseUpload}
-                            alternative-text="close"
-                            variant="bare-inverse"
-                            class="slds-modal__close">
-                        </lightning-button-icon>
-                        <h2 class="slds-text-heading_medium">Upload Document</h2>
-                    </header>
-                    <div class="slds-modal__content slds-p-around_medium">
-                        <lightning-file-upload
-                            label="Upload Document"
-                            name="fileUploader"
-                            accept=".pdf,.doc,.docx,.txt,.xls,.xlsx"
-                            record-id={recordId}
-                            onuploadfinished={handleUploadFinished}
-                            multiple>
-                        </lightning-file-upload>
-                    </div>
-                    <footer class="slds-modal__footer">
-                        <lightning-button
-                            variant="neutral"
-                            label="Cancel"
-                            onclick={handleCloseUpload}>
-                        </lightning-button>
-                    </footer>
-                </div>
-            </section>
-            <div class="slds-backdrop slds-backdrop_open"></div>
-        </template>
     </lightning-card>
 </template>

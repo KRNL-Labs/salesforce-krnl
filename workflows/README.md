@@ -212,3 +212,117 @@ Workflows support multiple regulatory frameworks:
 - **GDPR**: Data protection and privacy compliance
 - **HIPAA**: Healthcare information security requirements
 - **Custom**: Configurable rules for industry-specific requirements
+
+## Direct LWC → Backend Upload POC
+
+This POC replaces the legacy `ContentDocument → Apex → backend` upload pipeline with a direct
+`LWC → backend` upload, while keeping the backend as the source of truth for:
+
+- **File hashing**: Canonical SHA-256 hash computed on the backend
+- **Storage**: Optional Supabase object storage via `fileStorageService.storeFileAndHash`
+- **KRNL workflows**: Same registration and access workflows can consume the backend hash
+
+### Architecture Overview
+
+**Actors:**
+- LWC `directUploadToBackend` placed on a Salesforce record page (uses `recordId`)
+- Apex `DocumentAccessLogger.initDirectUpload`
+- Node backend (`/api/uploads/init` and `/api/uploads/:uploadId/file`)
+- Optional Supabase storage
+
+**Flow:**
+1. User selects a file in the `directUploadToBackend` LWC and clicks **Upload to Backend**.
+2. LWC calls Apex `DocumentAccessLogger.initDirectUpload(recordId)`.
+3. Apex calls backend `POST /api/uploads/init` with `{ recordId, userId }` and `X-Salesforce-Token`.
+4. Backend validates the Salesforce session, mints a short-lived JWT, and returns a signed
+   upload URL (including `?token=...`).
+5. LWC performs `fetch(uploadUrl, { method: 'PUT', body: file })` to send the file bytes.
+6. Backend verifies the JWT, parses the raw binary body, and calls `storeFileAndHash` to:
+   - Compute the canonical SHA-256 hash (`0x`-prefixed)
+   - Optionally upload the file to Supabase (bucket + path)
+7. Backend returns `{ success, hash, storage }` to the LWC, which displays the hash and
+   storage path.
+
+### Backend Endpoints
+
+- `POST /api/uploads/init`
+  - Authenticated via `validateSalesforceToken` and the `X-Salesforce-Token` header from Apex.
+  - Body: `{ recordId, userId? }`.
+  - Creates `uploadId` and signs a JWT with `{ uploadId, recordId, userId }` using `JWT_SECRET`.
+  - Responds with `{ uploadId, uploadUrl, uploadPath, expiresInSeconds }` where `uploadUrl`
+    uses `PUBLIC_BASE_URL`.
+- `PUT /api/uploads/:uploadId/file`
+  - Uses a shared `rawFileBody` parser (`express.raw`) so any content type is treated as binary
+    for this route.
+  - Verifies the `token` query parameter (JWT) and ensures `decoded.uploadId === :uploadId`.
+  - Reads the request body as a `Buffer` and forwards it to `storeFileAndHash` together with
+    `recordId`, `fileName` (from `X-File-Name`), and `contentType`.
+  - Returns `{ success, uploadId, recordId, userId, hash, storage }`.
+
+### Apex Integration
+
+Apex method in `DocumentAccessLogger.cls`:
+
+```apex
+@AuraEnabled
+public static String initDirectUpload(Id recordId) {
+    if (recordId == null) {
+        throw new DocumentAccessException('recordId is required for direct upload initialization');
+    }
+
+    HttpRequest req = new HttpRequest();
+    Http http = new Http();
+
+    String baseEndpoint = 'callout:' + BLOCKCHAIN_ENDPOINT;
+    req.setEndpoint(baseEndpoint + '/api/uploads/init');
+    req.setMethod('POST');
+    req.setHeader('Content-Type', 'application/json');
+    req.setHeader('Accept', 'application/json');
+    req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+    req.setTimeout(120000);
+
+    Map<String, Object> payload = new Map<String, Object>{
+        'recordId' => (String)recordId,
+        'userId'   => UserInfo.getUserId()
+    };
+    req.setBody(JSON.serialize(payload));
+
+    HTTPResponse res = http.send(req);
+    Integer status = res.getStatusCode();
+
+    if (status >= 200 && status < 300) {
+        Map<String, Object> body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+        if (body != null && body.containsKey('uploadUrl')) {
+            return (String)body.get('uploadUrl');
+        } else if (body != null && body.containsKey('uploadPath')) {
+            return (String)body.get('uploadPath');
+        } else {
+            throw new DocumentAccessException('Upload initialization response missing uploadUrl');
+        }
+    }
+
+    throw new DocumentAccessException(
+        'Direct upload initialization failed (' + status + '): ' + res.getBody()
+    );
+}
+```
+
+### LWC Component
+
+LWC bundle: `directUploadToBackend`.
+
+- Placed on a `lightning__RecordPage` (e.g. Account) so `recordId` is injected.
+- Uses a file input to capture the `File` object from the browser.
+- Calls `initDirectUpload({ recordId })` to get the signed upload URL.
+- Calls `fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': file.name }, body: file })`.
+- On success, displays the returned `hash` and `storage.path` (if Supabase is configured).
+
+### Basic Testing Steps
+
+1. Start the backend with `PUBLIC_BASE_URL` and `JWT_SECRET` configured (and Supabase vars if desired).
+2. Ensure Named Credential `krnl_blockchain_endpoint` points to `PUBLIC_BASE_URL`.
+3. Deploy `DocumentAccessLogger` and `directUploadToBackend` to the Salesforce org.
+4. Add `directUploadToBackend` to a record page via Lightning App Builder.
+5. Open a record with the component, select a file, and click **Upload to Backend**.
+6. Confirm in the UI that the hash (and storage path, if enabled) are displayed, and in the
+   backend logs that `Direct upload completed` is logged with the expected hash and storage info.

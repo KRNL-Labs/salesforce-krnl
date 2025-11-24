@@ -1,0 +1,45 @@
+<template>
+    <lightning-card title="Direct Upload to Backend" icon-name="custom:custom63">
+        <div class="slds-p-around_medium">
+            <lightning-input
+                type="file"
+                label="Select file"
+                onchange={handleFileChange}
+            ></lightning-input>
+
+            <template if:true={fileName}>
+                <p class="slds-m-top_small">Selected file: {fileName}</p>
+            </template>
+
+            <lightning-button
+                class="slds-m-top_medium"
+                label="Upload to Backend"
+                variant="brand"
+                onclick={handleUpload}
+                disabled={isUploading}
+            ></lightning-button>
+
+            <template if:true={hash}>
+                <div class="slds-m-top_medium">
+                    <p><strong>Hash:</strong> {hash}</p>
+                    <template if:true={storagePath}>
+                        <p><strong>Storage path:</strong> {storagePath}</p>
+                        <lightning-button
+                            class="slds-m-top_small"
+                            label="View / Download"
+                            variant="neutral"
+                            onclick={handleView}
+                        ></lightning-button>
+                    </template>
+                </div>
+            </template>
+        </div>
+
+        <template if:true={isUploading}>
+            <lightning-spinner
+                alternative-text="Uploading..."
+                size="small"
+            ></lightning-spinner>
+        </template>
+    </lightning-card>
+</template>

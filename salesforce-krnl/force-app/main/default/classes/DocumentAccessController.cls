@@ -6,7 +6,7 @@
 public with sharing class DocumentAccessController {
 
     /**
-     * @description Get list of available documents
+     * @description Get list of available documents from Blockchain_Document__c
      * @return List<DocumentWrapper> List of documents with metadata
      */
     @AuraEnabled(cacheable=true)
@@ -14,23 +14,38 @@ public with sharing class DocumentAccessController {
         List<DocumentWrapper> documentWrappers = new List<DocumentWrapper>();
 
         try {
-            List<ContentDocument> documents = [
-                SELECT Id, Title, FileType, ContentSize, CreatedDate, LastModifiedDate, OwnerId
-                FROM ContentDocument
-                WHERE IsDeleted = false
-                ORDER BY LastModifiedDate DESC
+            List<Blockchain_Document__c> documents = [
+                SELECT Id, Name, Document_Hash__c, Document_ID__c, Metadata__c, 
+                       Registration_Timestamp__c, Blockchain_Status__c, CreatedDate, OwnerId
+                FROM Blockchain_Document__c
+                ORDER BY CreatedDate DESC
                 LIMIT 100
             ];
 
-            for (ContentDocument doc : documents) {
+            for (Blockchain_Document__c doc : documents) {
                 DocumentWrapper wrapper = new DocumentWrapper();
                 wrapper.id = doc.Id;
-                wrapper.title = doc.Title;
-                wrapper.fileType = doc.FileType;
-                wrapper.contentSize = doc.ContentSize;
+                
+                // Parse fileName from Metadata__c JSON
+                String fileName = 'Unknown Document';
+                if (String.isNotBlank(doc.Metadata__c)) {
+                    try {
+                        Map<String, Object> metadata = (Map<String, Object>) JSON.deserializeUntyped(doc.Metadata__c);
+                        if (metadata.containsKey('fileName')) {
+                            fileName = (String) metadata.get('fileName');
+                        }
+                    } catch (Exception e) {
+                        // Keep default fileName if parsing fails
+                    }
+                }
+                
+                wrapper.title = fileName;
+                wrapper.fileType = doc.Blockchain_Status__c; // Use status as file type
+                wrapper.contentSize = 0; // Not tracking size in current schema
                 wrapper.createdDate = doc.CreatedDate;
-                wrapper.lastModifiedDate = doc.LastModifiedDate;
+                wrapper.lastModifiedDate = doc.Registration_Timestamp__c;
                 wrapper.ownerId = doc.OwnerId;
+                wrapper.documentHash = doc.Document_Hash__c; // Add hash for reference
 
                 documentWrappers.add(wrapper);
             }
@@ -94,6 +109,66 @@ public with sharing class DocumentAccessController {
     }
 
     /**
+     * @description Get uploaded documents for a specific Salesforce record (direct uploads)
+     * @param recordId Salesforce record ID (parent record associated with uploads)
+     * @return List<DocumentUploadWrapper> List of uploaded documents and their metadata
+     */
+    @AuraEnabled(cacheable=true)
+    public static List<DocumentUploadWrapper> getUploadsForRecord(Id recordId) {
+        List<DocumentUploadWrapper> uploads = new List<DocumentUploadWrapper>();
+
+        if (recordId == null) {
+            return uploads;
+        }
+
+        try {
+            List<Blockchain_Document__c> docs = [
+                SELECT Id, Document_ID__c, Document_Hash__c,
+                       Blockchain_Status__c, Registration_Timestamp__c,
+                       Metadata__c
+                FROM Blockchain_Document__c
+                WHERE Document_ID__c = :recordId
+                ORDER BY Registration_Timestamp__c DESC
+                LIMIT 50
+            ];
+
+            for (Blockchain_Document__c doc : docs) {
+                DocumentUploadWrapper w = new DocumentUploadWrapper();
+                w.id = doc.Id;
+                w.documentId = doc.Document_ID__c;
+                w.documentHash = doc.Document_Hash__c;
+                w.blockchainStatus = doc.Blockchain_Status__c;
+                w.registrationTimestamp = doc.Registration_Timestamp__c;
+                w.metadata = doc.Metadata__c;
+
+                if (String.isNotBlank(doc.Metadata__c)) {
+                    try {
+                        Map<String, Object> meta = (Map<String, Object>)JSON.deserializeUntyped(doc.Metadata__c);
+                        if (meta.containsKey('fileName')) {
+                            w.fileName = (String)meta.get('fileName');
+                        }
+                        if (meta.containsKey('bucket')) {
+                            w.bucket = (String)meta.get('bucket');
+                        }
+                        if (meta.containsKey('path')) {
+                            w.path = (String)meta.get('path');
+                        }
+                    } catch (Exception e) {
+                        // Ignore metadata parsing errors for safety; core fields are still available
+                    }
+                }
+
+                uploads.add(w);
+            }
+
+        } catch (Exception e) {
+            throw new AuraHandledException('Failed to retrieve uploads for record: ' + e.getMessage());
+        }
+
+        return uploads;
+    }
+
+    /**
      * @description Get compliance statistics and dashboard data
      * @return ComplianceStatsWrapper Compliance statistics
      */
@@ -102,8 +177,8 @@ public with sharing class DocumentAccessController {
         ComplianceStatsWrapper stats = new ComplianceStatsWrapper();
 
         try {
-            // Total documents count
-            stats.totalDocuments = [SELECT COUNT() FROM ContentDocument WHERE IsDeleted = false];
+            // Total documents count (from Blockchain_Document__c where we store upload metadata)
+            stats.totalDocuments = [SELECT COUNT() FROM Blockchain_Document__c];
 
             // Blockchain registered documents count
             stats.blockchainRegistered = [
@@ -327,6 +402,7 @@ public with sharing class DocumentAccessController {
         @AuraEnabled public Datetime createdDate { get; set; }
         @AuraEnabled public Datetime lastModifiedDate { get; set; }
         @AuraEnabled public Id ownerId { get; set; }
+        @AuraEnabled public String documentHash { get; set; }
     }
 
     public class AccessLogWrapper {
@@ -364,5 +440,17 @@ public with sharing class DocumentAccessController {
         @AuraEnabled public String errorMessage { get; set; }
         @AuraEnabled public String metadata { get; set; }
         @AuraEnabled public Boolean isRegistered { get; set; }
+    }
+
+    public class DocumentUploadWrapper {
+        @AuraEnabled public Id id { get; set; }
+        @AuraEnabled public Id documentId { get; set; }
+        @AuraEnabled public String documentHash { get; set; }
+        @AuraEnabled public String blockchainStatus { get; set; }
+        @AuraEnabled public Datetime registrationTimestamp { get; set; }
+        @AuraEnabled public String metadata { get; set; }
+        @AuraEnabled public String fileName { get; set; }
+        @AuraEnabled public String bucket { get; set; }
+        @AuraEnabled public String path { get; set; }
     }
 }

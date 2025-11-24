@@ -56,30 +56,92 @@ public with sharing class DocumentAccessLogger {
     }
 
     /**
-     * @description Register document on blockchain
-     * @param contentDocumentId Salesforce ContentDocument ID
+     * @description Get a short-lived viewer URL for a Supabase-backed file from the KRNL backend
+     * @param recordId Salesforce record ID associated with the file (for logging and context)
+     * @param path Supabase storage path for the file (e.g. <recordId>/<fileName>)
+     * @return String viewer URL that can be opened in the browser
+     */
+    @AuraEnabled
+    public static String getViewerUrl(Id recordId, String path) {
+        if (String.isBlank(path)) {
+            throw new DocumentAccessException('path is required to request a viewer URL');
+        }
+
+        HttpRequest req = new HttpRequest();
+        Http http = new Http();
+
+        String baseEndpoint = 'callout:' + BLOCKCHAIN_ENDPOINT;
+        req.setEndpoint(baseEndpoint + '/api/files/viewer-url');
+        req.setMethod('POST');
+        req.setHeader('Content-Type', 'application/json');
+        req.setHeader('Accept', 'application/json');
+        // Provide Salesforce token for backend middleware if required
+        req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+        req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+        req.setTimeout(120000);
+
+        Map<String, Object> payload = new Map<String, Object>{
+            'path' => path,
+            'recordId' => recordId != null ? (String)recordId : null
+        };
+        req.setBody(JSON.serialize(payload));
+
+        HTTPResponse res = http.send(req);
+        Integer status = res.getStatusCode();
+
+        if (status >= 200 && status < 300) {
+            Map<String, Object> body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+            if (body != null && body.containsKey('url')) {
+                return (String)body.get('url');
+            } else {
+                throw new DocumentAccessException('Viewer URL response missing url');
+            }
+        }
+
+        throw new DocumentAccessException(
+            'Viewer URL request failed (' + status + '): ' + res.getBody()
+        );
+    }
+
+    /**
+     * @description Register already-uploaded document on blockchain
+     * @param blockchainDocId Blockchain_Document__c ID
      * @return Boolean true if registered successfully
      */
     @AuraEnabled
-    public static Boolean registerDocumentOnBlockchain(Id contentDocumentId) {
+    public static Boolean registerDocumentOnBlockchain(Id blockchainDocId) {
         try {
-            String documentHash = DocumentHashUtil.generateHashForContentDocument(contentDocumentId);
-            Map<String, Object> metadata = DocumentHashUtil.createDocumentMetadata(contentDocumentId);
+            // Query the Blockchain_Document__c record to get hash and metadata
+            Blockchain_Document__c blockchainDoc = [
+                SELECT Id, Document_Hash__c, Document_ID__c, Metadata__c
+                FROM Blockchain_Document__c
+                WHERE Id = :blockchainDocId
+                LIMIT 1
+            ];
 
-            // Create blockchain registration record
-            Blockchain_Document__c blockchainDoc = new Blockchain_Document__c(
-                Document_ID__c = contentDocumentId,
-                Document_Hash__c = documentHash,
-                Blockchain_Status__c = 'Pending',
-                Registration_Timestamp__c = Datetime.now(),
-                Metadata__c = JSON.serialize(metadata)
-            );
+            // Parse metadata
+            Map<String, Object> metadata = new Map<String, Object>();
+            if (String.isNotBlank(blockchainDoc.Metadata__c)) {
+                metadata = (Map<String, Object>) JSON.deserializeUntyped(blockchainDoc.Metadata__c);
+            }
 
-            insert blockchainDoc;
+            // Ensure we have recordId in metadata
+            if (!metadata.containsKey('recordId') && String.isNotBlank(blockchainDoc.Document_ID__c)) {
+                metadata.put('recordId', blockchainDoc.Document_ID__c);
+            }
 
-            // Queue blockchain registration
+            // Update status to Pending
+            blockchainDoc.Blockchain_Status__c = 'Pending';
+            update blockchainDoc;
+
+            // Queue blockchain registration with existing hash
             if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
-                System.enqueueJob(new BlockchainRegistrar(blockchainDoc.Id, documentHash, metadata));
+                System.enqueueJob(new DirectUploadRegistrar(
+                    blockchainDoc.Id, 
+                    blockchainDoc.Document_Hash__c, 
+                    blockchainDoc.Document_ID__c,
+                    metadata
+                ));
             }
 
             return true;
@@ -160,6 +222,113 @@ public with sharing class DocumentAccessLogger {
             System.debug(LoggingLevel.ERROR, 'Document integrity validation failed: ' + e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * @description Initialize a direct upload session to the KRNL backend for LWC
+     * @param recordId Salesforce record ID that this document is associated with
+     * @return String upload URL that the LWC can call with a raw file PUT
+     */
+    @AuraEnabled
+    public static String initDirectUpload(Id recordId) {
+        if (recordId == null) {
+            throw new DocumentAccessException('recordId is required for direct upload initialization');
+        }
+
+        HttpRequest req = new HttpRequest();
+        Http http = new Http();
+
+        String baseEndpoint = 'callout:' + BLOCKCHAIN_ENDPOINT;
+        req.setEndpoint(baseEndpoint + '/api/uploads/init');
+        req.setMethod('POST');
+        req.setHeader('Content-Type', 'application/json');
+        req.setHeader('Accept', 'application/json');
+        // Provide Salesforce token for backend middleware if required
+        req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+        req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+        req.setTimeout(120000);
+
+        Map<String, Object> payload = new Map<String, Object>{
+            'recordId' => (String)recordId,
+            'userId' => UserInfo.getUserId()
+        };
+        req.setBody(JSON.serialize(payload));
+
+        HTTPResponse res = http.send(req);
+        Integer status = res.getStatusCode();
+
+        if (status >= 200 && status < 300) {
+            Map<String, Object> body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+            if (body != null && body.containsKey('uploadUrl')) {
+                return (String)body.get('uploadUrl');
+            } else if (body != null && body.containsKey('uploadPath')) {
+                return (String)body.get('uploadPath');
+            } else {
+                throw new DocumentAccessException('Upload initialization response missing uploadUrl');
+            }
+        }
+
+        throw new DocumentAccessException(
+            'Direct upload initialization failed (' + status + '): ' + res.getBody()
+        );
+    }
+
+    /**
+     * @description Record metadata about a direct upload so we can list uploads per record
+     * @param recordId Salesforce record ID associated with the upload
+     * @param hash Canonical SHA-256 hash (0x-prefixed) returned by the backend
+     * @param storageBucket Supabase bucket name (optional)
+     * @param storagePath Supabase path within the bucket (optional)
+     * @param fileName Original file name as seen by the user (optional)
+     * @return Id of the created Blockchain_Document__c record
+     */
+    @AuraEnabled
+    public static Id recordDirectUploadMetadata(
+        Id recordId,
+        String hash,
+        String storageBucket,
+        String storagePath,
+        String fileName
+    ) {
+        if (recordId == null) {
+            throw new DocumentAccessException('recordId is required to record upload metadata');
+        }
+        if (String.isBlank(hash)) {
+            throw new DocumentAccessException('hash is required to record upload metadata');
+        }
+
+        Map<String, Object> metadata = new Map<String, Object>();
+        if (!String.isBlank(fileName)) {
+            metadata.put('fileName', fileName);
+        }
+        if (!String.isBlank(storageBucket)) {
+            metadata.put('bucket', storageBucket);
+        }
+        if (!String.isBlank(storagePath)) {
+            metadata.put('path', storagePath);
+        }
+
+        Blockchain_Document__c doc = new Blockchain_Document__c(
+            Document_ID__c = recordId,
+            Document_Hash__c = hash,
+            Blockchain_Status__c = 'Pending',
+            Registration_Timestamp__c = Datetime.now(),
+            Metadata__c = metadata.isEmpty() ? null : JSON.serialize(metadata)
+        );
+
+        insert doc;
+
+        // Automatically queue blockchain registration after upload
+        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+            System.enqueueJob(new DirectUploadRegistrar(
+                doc.Id,
+                hash,
+                recordId,
+                metadata
+            ));
+        }
+
+        return doc.Id;
     }
 
     /**
@@ -250,7 +419,7 @@ public with sharing class DocumentAccessLogger {
      */
     public class BlockchainRegistrar implements Queueable, Database.AllowsCallouts {
         private Id blockchainDocId;
-        private String documentHash;
+        private String documentHash; // Initial local hash, will be replaced by backend hash
         private Map<String, Object> metadata;
 
         public BlockchainRegistrar(Id blockchainDocId, String documentHash, Map<String, Object> metadata) {
@@ -261,23 +430,134 @@ public with sharing class DocumentAccessLogger {
 
         public void execute(QueueableContext context) {
             try {
-                // Prepare payload for KRNL backend /api/compliance
                 String salesforceRecordId = (String)metadata.get('salesforceId');
+
+                // 1. Upload file to backend to get authoritative hash and storage
+                Map<String, Object> uploadResult = uploadFileToBackend(salesforceRecordId);
+                String backendHash = (String)uploadResult.get('hash');
+                // Optional: store storage path if needed
+                // Map<String, Object> storage = (Map<String, Object>)uploadResult.get('storage');
+
+                // 2. Prepare payload for KRNL backend /api/compliance using BACKEND HASH
                 Map<String, Object> payload = new Map<String, Object>{
                     'recordId' => salesforceRecordId,
                     'fileId' => salesforceRecordId,
-                    'docHash' => documentHash
+                    'docHash' => backendHash // Use authoritative hash
                 };
 
                 String result = callBlockchainAPI('registerDocument', payload);
 
-                // Update blockchain document status
+                // 3. Update blockchain document status and hash
                 Blockchain_Document__c blockchainDoc = new Blockchain_Document__c(
                     Id = blockchainDocId,
+                    Document_Hash__c = backendHash, // Update with authoritative hash
                     Blockchain_Status__c = 'Registered',
                     Blockchain_Response__c = result
                 );
                 update blockchainDoc;
+
+            } catch (Exception e) {
+                // Update with error status
+                Blockchain_Document__c blockchainDoc = new Blockchain_Document__c(
+                    Id = blockchainDocId,
+                    Blockchain_Status__c = 'Registration Failed',
+                    Error_Message__c = e.getMessage()
+                );
+                update blockchainDoc;
+            }
+        }
+
+        /**
+         * @description Upload file content to backend for hashing and storage
+         */
+        private Map<String, Object> uploadFileToBackend(String contentDocumentId) {
+            // Query ContentVersion to get the file content
+            ContentVersion cv = [
+                SELECT VersionData, Title, FileExtension
+                FROM ContentVersion
+                WHERE ContentDocumentId = :contentDocumentId
+                AND IsLatest = true
+                LIMIT 1
+            ];
+
+            HttpRequest req = new HttpRequest();
+            req.setEndpoint('callout:' + BLOCKCHAIN_ENDPOINT + '/api/files/upload');
+            req.setMethod('POST');
+            req.setHeader('Content-Type', 'application/octet-stream');
+            req.setHeader('X-Content-Document-Id', contentDocumentId);
+            req.setHeader('X-File-Name', cv.Title + '.' + cv.FileExtension);
+            req.setBodyAsBlob(cv.VersionData);
+            req.setTimeout(120000); // 2 minutes for upload
+
+            Http http = new Http();
+            HTTPResponse res = http.send(req);
+
+            if (res.getStatusCode() >= 200 && res.getStatusCode() < 300) {
+                return (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+            } else {
+                throw new DocumentAccessException(
+                    'File upload failed (' + res.getStatusCode() + '): ' + res.getBody()
+                );
+            }
+        }
+    }
+
+    /**
+     * @description Queueable class for registering already-uploaded documents on blockchain
+     */
+    public class DirectUploadRegistrar implements Queueable, Database.AllowsCallouts {
+        private Id blockchainDocId;
+        private String documentHash;
+        private String recordId;
+        private Map<String, Object> metadata;
+
+        public DirectUploadRegistrar(Id blockchainDocId, String documentHash, String recordId, Map<String, Object> metadata) {
+            this.blockchainDocId = blockchainDocId;
+            this.documentHash = documentHash;
+            this.recordId = recordId;
+            this.metadata = metadata;
+        }
+
+        public void execute(QueueableContext context) {
+            try {
+                // File is already uploaded to Supabase, hash is already computed
+                // Call direct registration endpoint (bypasses KRNL workflow)
+                HttpRequest req = new HttpRequest();
+                req.setEndpoint('callout:' + BLOCKCHAIN_ENDPOINT + '/api/documents/register-direct');
+                req.setMethod('POST');
+                req.setHeader('Content-Type', 'application/json');
+                req.setHeader('Accept', 'application/json');
+                req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+                req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+                req.setTimeout(120000);
+
+                Map<String, Object> payload = new Map<String, Object>{
+                    'documentHash' => documentHash,
+                    'salesforceRecordId' => recordId,
+                    'metadata' => JSON.serialize(metadata)
+                };
+
+                req.setBody(JSON.serialize(payload));
+
+                Http http = new Http();
+                HTTPResponse res = http.send(req);
+
+                if (res.getStatusCode() >= 200 && res.getStatusCode() < 300) {
+                    Map<String, Object> result = (Map<String, Object>) JSON.deserializeUntyped(res.getBody());
+                    
+                    // Update blockchain document status
+                    Blockchain_Document__c blockchainDoc = new Blockchain_Document__c(
+                        Id = blockchainDocId,
+                        Blockchain_Status__c = 'Registered',
+                        Blockchain_Response__c = JSON.serialize(result),
+                        Registration_Timestamp__c = Datetime.now()
+                    );
+                    update blockchainDoc;
+                } else {
+                    throw new DocumentAccessException(
+                        'Direct registration failed (' + res.getStatusCode() + '): ' + res.getBody()
+                    );
+                }
 
             } catch (Exception e) {
                 // Update with error status
@@ -357,6 +637,7 @@ public with sharing class DocumentAccessLogger {
         req.setHeader('Accept', 'application/json');
         // Provide Salesforce token for backend middleware if required
         req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+        req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
         req.setTimeout(120000);
         req.setBody(JSON.serialize(parameters));
 

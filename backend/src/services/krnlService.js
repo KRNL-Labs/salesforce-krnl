@@ -1,6 +1,7 @@
 const { logger } = require('../utils/logger');
 const axios = require('axios');
 const { buildTransactionIntent } = require('./intentBuilder');
+const { buildTransactionIntent4337 } = require('./eip4337IntentBuilder');
 
 class KRNLService {
   constructor() {
@@ -29,12 +30,21 @@ class KRNLService {
 
     try {
       // In production, this calls the actual KRNL node using the workflow DSL
-      const workflowTemplate = require('../../workflows/document-registration-workflow.json');
+      const workflowTemplate = require('../../../workflows/document-registration-workflow.json');
 
-      // Build transaction intent values for KRNL DSL placeholders
-      const intent = buildTransactionIntent({
-        delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
-      });
+      // Build transaction intent values for KRNL DSL placeholders using EIP-4337 pattern
+      let intent;
+      try {
+        intent = await buildTransactionIntent4337({
+          targetContract: process.env.DOCUMENT_REGISTRY_CONTRACT,
+          functionSignature: 'registerDocumentKRNL((uint256,uint256,bytes32,(bytes32,bytes,bytes)[],bytes,bool,bytes))'
+        });
+      } catch (e) {
+        logger.warn('Falling back to legacy intent builder for compliance workflow', { error: e.message });
+        intent = buildTransactionIntent({
+          delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
+        });
+      }
 
       const workflowParams = {
         ENV: {
@@ -46,13 +56,24 @@ class KRNLService {
         DOCUMENT_HASH: docHash,
         SALESFORCE_ACCESS_TOKEN: process.env.SALESFORCE_ACCESS_TOKEN,
         SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL,
+        CURRENT_TIMESTAMP: new Date().toISOString(),
         TRANSACTION_INTENT_DELEGATE: intent.delegate,
         TRANSACTION_INTENT_ID: intent.id,
         TRANSACTION_INTENT_DEADLINE: intent.deadline,
         USER_SIGNATURE: intent.signature
       };
 
-      // Mock KRNL API call
+      const { SALESFORCE_ACCESS_TOKEN, ...restParams } = workflowParams;
+      const safeWorkflowParams = {
+        ...restParams,
+        SALESFORCE_ACCESS_TOKEN: SALESFORCE_ACCESS_TOKEN ? '[REDACTED]' : undefined
+      };
+
+      logger.debug('Prepared KRNL workflow DSL for compliance', {
+        workflowName: 'document-registration-workflow.json',
+        workflowParameters: safeWorkflowParams
+      });
+
       const response = await this._callKRNLNode('executeWorkflow', {
         workflow: workflowTemplate,
         parameters: workflowParams,
@@ -67,7 +88,13 @@ class KRNLService {
         docHash,
         status: 'RUNNING',
         startedAt: new Date().toISOString(),
-        workflowId: response.workflowId
+        workflowId: response.workflowId,
+        debug: {
+          workflowName: 'document-registration-workflow.json',
+          workflowTemplate,
+          workflowParameters: safeWorkflowParams,
+          pollingHistory: []
+        }
       });
 
       return {
@@ -96,11 +123,20 @@ class KRNLService {
     }
 
     try {
-      const workflowTemplate = require('../../workflows/document-access-logging-workflow.json');
+      const workflowTemplate = require('../../../workflows/document-access-logging-workflow.json');
 
-      const intent = buildTransactionIntent({
-        delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
-      });
+      let intent;
+      try {
+        intent = await buildTransactionIntent4337({
+          targetContract: process.env.DOCUMENT_REGISTRY_CONTRACT,
+          functionSignature: 'logDocumentAccessKRNL((uint256,uint256,bytes32,(bytes32,bytes,bytes)[],bytes,bool,bytes))'
+        });
+      } catch (e) {
+        logger.warn('Falling back to legacy intent builder for access workflow', { error: e.message });
+        intent = buildTransactionIntent({
+          delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
+        });
+      }
 
       const workflowParams = {
         ENV: {
@@ -156,11 +192,21 @@ class KRNLService {
     }
 
     try {
-      const workflowTemplate = require('../../workflows/document-integrity-validation-workflow.json');
+      const workflowTemplate = require('../../../workflows/document-integrity-validation-workflow.json');
 
-      const intent = buildTransactionIntent({
-        delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
-      });
+      let intent;
+      try {
+        intent = await buildTransactionIntent4337({
+          targetContract: process.env.DOCUMENT_REGISTRY_CONTRACT,
+          // Integrity validation still uses the same AuthData pattern
+          functionSignature: 'registerDocumentKRNL((uint256,uint256,bytes32,(bytes32,bytes,bytes)[],bytes,bool,bytes))'
+        });
+      } catch (e) {
+        logger.warn('Falling back to legacy intent builder for integrity workflow', { error: e.message });
+        intent = buildTransactionIntent({
+          delegate: process.env.TARGET_CONTRACT_OWNER || process.env.SENDER_ADDRESS
+        });
+      }
 
       const workflowParams = {
         ENV: {
@@ -197,6 +243,58 @@ class KRNLService {
     }
   }
 
+  async _pollKRNLWorkflowUntilComplete(sessionId, workflowId, timeoutMs = 30000, intervalMs = 2000) {
+    const startTime = Date.now();
+    let lastStatus = null;
+
+    const envTimeout = process.env.KRNL_POLL_TIMEOUT_MS
+      ? parseInt(process.env.KRNL_POLL_TIMEOUT_MS, 10)
+      : NaN;
+    const effectiveTimeoutMs = Number.isFinite(envTimeout) && envTimeout > 0
+      ? envTimeout
+      : timeoutMs;
+
+    // Poll KRNL node until workflow reaches a terminal state or timeout
+    // This keeps the polling logic on the server side, similar to the facilitator client.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const elapsed = Date.now() - startTime;
+      if (elapsed > effectiveTimeoutMs) {
+        const status = lastStatus && lastStatus.status ? lastStatus.status : 'UNKNOWN';
+        throw new Error(`Workflow polling timed out after ${effectiveTimeoutMs}ms (last status: ${status})`);
+      }
+
+      const response = await this._callKRNLNode('getWorkflowStatus', {
+        sessionId,
+        workflowId
+      });
+
+      lastStatus = response;
+      const session = this.sessions.get(sessionId);
+      if (session && session.debug && Array.isArray(session.debug.pollingHistory)) {
+        session.debug.pollingHistory.push({
+          timestamp: new Date().toISOString(),
+          status: response.status,
+          raw: response
+        });
+      }
+      const statusUpper = (response.status || '').toUpperCase();
+
+      if (statusUpper === 'COMPLETED' || statusUpper === 'FAILED' || statusUpper === 'CANCELLED') {
+        return response;
+      }
+
+      logger.info('KRNL workflow still in progress', {
+        sessionId,
+        workflowId,
+        status: response.status,
+        elapsedMs: elapsed
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
   /**
    * Get workflow status
    */
@@ -214,10 +312,7 @@ class KRNLService {
 
     try {
       // In production, query KRNL node for workflow status
-      const response = await this._callKRNLNode('getWorkflowStatus', {
-        sessionId,
-        workflowId: session.workflowId
-      });
+      const response = await this._pollKRNLWorkflowUntilComplete(sessionId, session.workflowId);
 
       // Update session with latest status
       session.status = response.status;
@@ -231,7 +326,8 @@ class KRNLService {
         result: response.result,
         txHash: response.txHash,
         timestamp: session.updatedAt,
-        progress: response.progress || {}
+        progress: response.progress || {},
+        debug: session.debug || null
       };
 
     } catch (error) {
@@ -395,8 +491,7 @@ class KRNLService {
     try {
       const response = await axios.post(`${this.nodeUrl}/api/workflows/${method}`, params, {
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.KRNL_API_KEY}`
+          'Content-Type': 'application/json'
         },
         timeout: 30000
       });
@@ -405,6 +500,12 @@ class KRNLService {
         method,
         sessionId: params && params.sessionId,
         status: response.data && response.data.status
+      });
+
+      logger.debug('KRNL node response payload', {
+        method,
+        sessionId: params && params.sessionId,
+        data: response.data
       });
 
       return response.data;

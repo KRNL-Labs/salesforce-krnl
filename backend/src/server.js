@@ -3,12 +3,25 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const { logger } = require('./utils/logger');
 const complianceRouter = require('./controllers/complianceController');
 const accessRouter = require('./controllers/accessController');
+const { initSmartAccountFromEnv } = require('./services/eip4337AccountService');
+const { storeFileAndHash, createSignedFileUrl } = require('./services/fileStorageService_s3');
+const { validateSalesforceToken } = require('./middleware/auth');
+const { registerDocumentDirect } = require('./services/directContractService');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Raw body parser for binary file uploads (Apex + LWC)
+// Use a broad type matcher so non-octet-stream content types (e.g. application/pdf)
+// are still treated as raw binary for these specific routes.
+const rawFileBody = express.raw({
+  type: () => true,
+  limit: process.env.MAX_FILE_UPLOAD_BYTES || '10485760' // 10 MB default
+});
 
 // Middleware
 app.use(helmet());
@@ -29,6 +42,162 @@ app.use((req, res, next) => {
 // KRNL API routers (Salesforce integrations)
 app.use('/api/compliance', complianceRouter);
 app.use('/api/access', accessRouter);
+
+// ---------------------------------------------------------------------------
+// Direct upload session endpoints for LWC -> backend file uploads
+// ---------------------------------------------------------------------------
+
+// Initialize a direct upload session from Salesforce (Apex)
+// Body: { recordId, userId? }
+// Returns an uploadId and a short-lived uploadUrl that the LWC can call directly.
+app.post('/api/uploads/init', validateSalesforceToken, (req, res) => {
+  try {
+    const { recordId, userId } = req.body || {};
+
+    if (!recordId) {
+      return res.status(400).json({
+        success: false,
+        error: 'recordId is required to initialize upload session'
+      });
+    }
+
+    const effectiveUserId = userId
+      || (req.user && (req.user.salesforceId || req.user.id))
+      || null;
+
+    const orgId = (req.tenant && req.tenant.orgId)
+      || (req.user && req.user.orgId)
+      || null;
+
+    const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    const secret = process.env.JWT_SECRET || 'test_secret_for_development';
+    const expiresInSeconds = Number.parseInt(process.env.UPLOAD_TOKEN_TTL_SECONDS || '900', 10); // 15 minutes default
+
+    const tokenPayload = {
+      uploadId,
+      recordId,
+      userId: effectiveUserId,
+      orgId
+    };
+
+    const token = jwt.sign(tokenPayload, secret, { expiresIn: expiresInSeconds });
+
+    const baseUrl = process.env.PUBLIC_BASE_URL || '';
+    const uploadPath = `/api/uploads/${uploadId}/file?token=${encodeURIComponent(token)}`;
+    const uploadUrl = baseUrl ? `${baseUrl}${uploadPath}` : uploadPath;
+
+    logger.info('Initialized direct upload session', {
+      uploadId,
+      recordId,
+      userId: effectiveUserId,
+      orgId,
+      expiresInSeconds,
+      baseUrlConfigured: !!baseUrl
+    });
+
+    res.json({
+      success: true,
+      uploadId,
+      uploadUrl,
+      uploadPath,
+      expiresInSeconds
+    });
+
+  } catch (error) {
+    logger.error('Failed to initialize upload session', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to initialize upload session'
+    });
+  }
+});
+
+// Direct binary upload endpoint for LWC
+// Uses the signed token from /api/uploads/init to authorize the upload
+app.put('/api/uploads/:uploadId/file', rawFileBody, async (req, res) => {
+  try {
+    const { uploadId } = req.params;
+    const token = req.query.token;
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: 'Missing upload token'
+      });
+    }
+
+    const secret = process.env.JWT_SECRET || 'test_secret_for_development';
+    let decoded;
+    try {
+      decoded = jwt.verify(token, secret);
+    } catch (err) {
+      logger.warn('Invalid or expired upload token', { error: err.message });
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired upload token'
+      });
+    }
+
+    if (!decoded || decoded.uploadId !== uploadId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Upload token does not match uploadId'
+      });
+    }
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'File body is required as application/octet-stream'
+      });
+    }
+
+    const fileNameHeader = req.header('X-File-Name') || req.header('x-file-name');
+    const fileName = fileNameHeader && fileNameHeader.trim().length > 0
+      ? fileNameHeader
+      : `upload-${uploadId}.bin`;
+
+    const contentType = req.header('Content-Type') || req.header('content-type') || 'application/octet-stream';
+
+    const recordId = decoded.recordId;
+    const userId = decoded.userId;
+    const orgId = decoded.orgId || null;
+
+    const { hash, storage } = await storeFileAndHash({
+      buffer: req.body,
+      contentDocumentId: recordId,
+      fileName,
+      contentType
+    });
+
+    logger.info('Direct upload completed', {
+      uploadId,
+      recordId,
+      userId,
+      orgId,
+      hash,
+      storage
+    });
+
+    res.json({
+      success: true,
+      uploadId,
+      recordId,
+      userId,
+      orgId,
+      hash,
+      storage
+    });
+
+  } catch (error) {
+    logger.error('Direct upload failed', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to upload file'
+    });
+  }
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -102,6 +271,151 @@ app.post('/api/compliance/check', (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Internal server error during compliance check'
+    });
+  }
+});
+
+// File upload endpoint for Salesforce (Apex Blob)
+// Accepts raw octet-stream body, stores it in Supabase (when configured), and returns a deterministic hash
+app.post('/api/files/upload', rawFileBody, async (req, res) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'File body is required as application/octet-stream'
+      });
+    }
+
+    const contentDocumentId = req.header('X-Content-Document-Id') || req.header('x-content-document-id') || null;
+    const fileName = req.header('X-File-Name') || req.header('x-file-name') || null;
+    const contentType = req.header('Content-Type') || req.header('content-type') || 'application/octet-stream';
+
+    const { hash, storage } = await storeFileAndHash({
+      buffer: req.body,
+      contentDocumentId,
+      fileName,
+      contentType
+    });
+
+    logger.info('File uploaded and hashed successfully', {
+      contentDocumentId,
+      hash,
+      storage
+    });
+
+    res.json({
+      success: true,
+      hash,
+      storage
+    });
+
+  } catch (error) {
+    logger.error('File upload + hash failed', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to upload and hash file'
+    });
+  }
+});
+
+// Viewer URL endpoint for Supabase-backed files
+// Accepts a file path (and optional recordId for logging) and returns a short-lived signed URL
+app.post('/api/files/viewer-url', validateSalesforceToken, async (req, res) => {
+  try {
+    const { path, recordId } = req.body || {};
+
+    if (!path || typeof path !== 'string' || !path.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'path is required to create a viewer URL'
+      });
+    }
+
+    const expiresIn = Number.parseInt(process.env.VIEWER_URL_TTL_SECONDS || '3600', 10); // 1 hour default
+
+    const { url } = await createSignedFileUrl({
+      path: path.trim(),
+      expiresIn
+    });
+
+    logger.info('Generated viewer URL for Supabase file', {
+      recordId: recordId || null,
+      path: path.trim(),
+      expiresIn
+    });
+
+    res.json({
+      success: true,
+      url,
+      expiresIn
+    });
+  } catch (error) {
+    logger.error('Failed to create viewer URL', { error: error.message });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create viewer URL'
+    });
+  }
+});
+
+// Direct document registration endpoint (bypasses KRNL workflow)
+app.post('/api/documents/register-direct', validateSalesforceToken, async (req, res) => {
+  try {
+    const { documentHash, salesforceRecordId, metadata } = req.body || {};
+
+    if (!documentHash || typeof documentHash !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'documentHash is required'
+      });
+    }
+
+    if (!salesforceRecordId || typeof salesforceRecordId !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'salesforceRecordId is required'
+      });
+    }
+
+    logger.info('Direct document registration requested', {
+      documentHash,
+      salesforceRecordId,
+      orgId: req.tenant?.orgId,
+      userId: req.user?.userId
+    });
+
+    // Call contract directly
+    const result = await registerDocumentDirect({
+      documentHash,
+      salesforceRecordId,
+      metadata: metadata || '{}'
+    });
+
+    logger.info('Direct document registration successful', {
+      documentHash,
+      salesforceRecordId,
+      txHash: result.txHash,
+      blockNumber: result.blockNumber
+    });
+
+    res.json({
+      success: true,
+      txHash: result.txHash,
+      blockNumber: result.blockNumber,
+      gasUsed: result.gasUsed,
+      documentHash,
+      salesforceRecordId
+    });
+
+  } catch (error) {
+    logger.error('Direct document registration failed', {
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to register document on blockchain',
+      details: error.message
     });
   }
 });
@@ -311,13 +625,26 @@ app.use('*', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 KRNL Compliance Server running on port ${PORT}`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log(`📋 Compliance API: http://localhost:${PORT}/api/compliance/check`);
-  console.log(`🔐 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log('');
-  console.log('Ready for ngrok! Run: ngrok http 3000');
-});
+async function startServer() {
+  try {
+    if (process.env.ENABLE_EIP4337_INIT === 'true') {
+      await initSmartAccountFromEnv();
+    }
+
+    app.listen(PORT, () => {
+      console.log(`🚀 KRNL Compliance Server running on port ${PORT}`);
+      console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+      console.log(`📋 Compliance API: http://localhost:${PORT}/api/compliance/check`);
+      console.log(`🔐 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log('');
+      console.log('Ready for ngrok! Run: ngrok http 3000');
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 
 module.exports = app;

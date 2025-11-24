@@ -1,4 +1,5 @@
 const winston = require('winston');
+const util = require('util');
 
 // Create logger configuration
 const logger = winston.createLogger({
@@ -16,7 +17,15 @@ const logger = winston.createLogger({
         winston.format.colorize(),
         winston.format.simple(),
         winston.format.printf(({ timestamp, level, message, ...meta }) => {
-          return `${timestamp} [${level}]: ${message} ${Object.keys(meta).length ? JSON.stringify(meta, null, 2) : ''}`;
+          let metaString = '';
+          if (Object.keys(meta).length) {
+            try {
+              metaString = JSON.stringify(meta, null, 2);
+            } catch (err) {
+              metaString = util.inspect(meta, { depth: 3, colors: false });
+            }
+          }
+          return `${timestamp} [${level}]: ${message} ${metaString}`;
         })
       )
     })
