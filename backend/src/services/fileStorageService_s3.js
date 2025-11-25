@@ -156,7 +156,66 @@ async function createSignedFileUrl({ path, expiresIn = 3600 }) {
   }
 }
 
+/**
+ * Retrieve a file buffer from Supabase Storage (via S3 API)
+ *
+ * @param {string} path - File path in Supabase bucket (e.g., "recordId/filename.pdf")
+ * @returns {Promise<{ buffer: Buffer, contentType: string, fileName: string }>}
+ */
+async function getSupabaseFileBuffer(path) {
+  if (!s3Client) {
+    throw new Error('S3 client not initialized, cannot retrieve file');
+  }
+
+  if (!path || typeof path !== 'string') {
+    throw new Error('File path is required');
+  }
+
+  logger.info('Retrieving file from Supabase Storage via S3 API', {
+    bucket: supabaseBucket,
+    path
+  });
+
+  try {
+    const command = new GetObjectCommand({
+      Bucket: supabaseBucket,
+      Key: path
+    });
+
+    const response = await s3Client.send(command);
+
+    // Convert stream to buffer
+    const chunks = [];
+    for await (const chunk of response.Body) {
+      chunks.push(chunk);
+    }
+    const buffer = Buffer.concat(chunks);
+
+    const fileName = path.split('/').pop() || 'document';
+    const contentType = response.ContentType || 'application/octet-stream';
+
+    logger.info('File retrieved successfully from Supabase', {
+      path,
+      size: buffer.length,
+      contentType
+    });
+
+    return {
+      buffer,
+      contentType,
+      fileName
+    };
+  } catch (error) {
+    logger.error('Failed to retrieve file from Supabase', {
+      error: error.message,
+      path
+    });
+    throw new Error(`Failed to retrieve file from storage: ${error.message}`);
+  }
+}
+
 module.exports = {
   storeFileAndHash,
-  createSignedFileUrl
+  createSignedFileUrl,
+  getSupabaseFileBuffer
 };

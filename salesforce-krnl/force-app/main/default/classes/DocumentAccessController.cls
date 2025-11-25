@@ -157,6 +157,13 @@ public with sharing class DocumentAccessController {
                         // Ignore metadata parsing errors for safety; core fields are still available
                     }
                 }
+                
+                // Ensure path always has a value for file retrieval
+                // If metadata doesn't have path OR path is missing filename, construct it from documentId + fileName
+                if (String.isBlank(w.path) || !w.path.contains('/')) {
+                    String fallbackFileName = String.isNotBlank(w.fileName) ? w.fileName : 'document.pdf';
+                    w.path = doc.Document_ID__c + '/' + fallbackFileName;
+                }
 
                 uploads.add(w);
             }

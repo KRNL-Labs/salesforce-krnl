@@ -19,7 +19,8 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       userId,
       accessType,
       clientIP,
-      userAgent
+      userAgent,
+      documentId
     } = req.body;
 
     logger.debug('Incoming access log request', {
@@ -28,7 +29,8 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       userId,
       accessType,
       clientIP: clientIP || req.ip,
-      userAgent: userAgent || req.get('User-Agent')
+      userAgent: userAgent || req.get('User-Agent'),
+      documentId
     });
 
     // Validate required fields
@@ -59,20 +61,64 @@ router.post('/', validateSalesforceToken, async (req, res) => {
     });
 
     // Start KRNL access logging workflow
-    const workflowResult = await krnlService.startAccessWorkflow({
+    // Use documentId from request if provided (file path), otherwise fall back to recordId
+    const finalDocumentId = documentId || recordId;
+    
+    logger.debug('Starting workflow with documentId', {
+      documentIdFromRequest: documentId,
+      recordId,
+      finalDocumentId
+    });
+    
+    const workflowStart = await krnlService.startAccessWorkflow({
       documentHash,
+      recordId,
       userId,
       accessType,
       sessionId,
       clientIP: clientIP || req.ip,
-      userAgent: userAgent || req.get('User-Agent')
+      userAgent: userAgent || req.get('User-Agent'),
+      documentId: finalDocumentId
     });
 
     logger.info('KRNL access workflow started', {
       sessionId,
-      workflowId: workflowResult.workflowId,
-      status: workflowResult.status
+      workflowId: workflowStart.workflowId,
+      status: workflowStart.status
     });
+
+    // Wait for KRNL workflow completion and on-chain settlement (logDocumentAccessKRNL)
+    let workflowStatus;
+    try {
+      workflowStatus = await krnlService.getWorkflowStatus(sessionId);
+    } catch (pollError) {
+      logger.error('KRNL access workflow polling failed', {
+        sessionId,
+        error: pollError.message
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to complete access logging workflow',
+        details: pollError.message
+      });
+    }
+
+    logger.info('KRNL access workflow completed', {
+      sessionId,
+      state: workflowStatus.state,
+      txHash: workflowStatus.txHash
+    });
+
+    const okStates = ['COMPLETED', 'COMPLETED_WITH_EVENT'];
+
+    if (!okStates.includes(workflowStatus.state) || !workflowStatus.txHash) {
+      return res.status(500).json({
+        success: false,
+        error: 'Access logging workflow did not complete successfully',
+        state: workflowStatus.state,
+        txHash: workflowStatus.txHash || null
+      });
+    }
 
     // Generate time-limited access token for document viewer
     const accessToken = krnlService.generateAccessToken({
@@ -82,15 +128,23 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       accessType
     });
 
-    // Return access token and workflow info
-    res.status(201).json({
+    // Build full viewer URL with backend base URL
+    const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const viewerUrl = `${baseUrl}/api/view?token=${accessToken}`;
+
+    // Return access token and workflow info after on-chain settlement
+    res.status(200).json({
       success: true,
-      sessionId,
+      accessHash: workflowStatus.accessHash,
       accessToken,
-      viewerUrl: `/api/view?token=${accessToken}`,
-      workflowStatus: workflowResult.status,
+      documentId: workflowStatus.documentId,
       expiresIn: '15 minutes',
-      message: 'Document access logged successfully'
+      message: 'Document access logged on-chain',
+      result: workflowStatus.result,
+      sessionId,
+      txHash: workflowStatus.txHash,
+      viewerUrl,
+      workflowStatus: workflowStatus.state
     });
 
   } catch (error) {

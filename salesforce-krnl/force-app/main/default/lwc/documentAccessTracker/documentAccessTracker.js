@@ -4,7 +4,9 @@ import getComplianceStats from '@salesforce/apex/DocumentAccessController.getCom
 import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
 import getUploadsForRecord from '@salesforce/apex/DocumentAccessController.getUploadsForRecord';
 import getViewerUrl from '@salesforce/apex/DocumentAccessLogger.getViewerUrl';
+import getWatermarkedViewerUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getWatermarkedViewerUrlForDirectUpload';
 import registerDocumentOnBlockchain from '@salesforce/apex/DocumentAccessLogger.registerDocumentOnBlockchain';
+import logDirectUploadAccess from '@salesforce/apex/DocumentAccessLogger.logDirectUploadAccess';
 
 export default class DocumentAccessTracker extends LightningElement {
     @api recordId; // Current record ID if used in record page
@@ -296,21 +298,40 @@ export default class DocumentAccessTracker extends LightningElement {
                 return;
             }
 
-            const contextRecordId = this.recordId || row.documentId;
-
+            this.isProcessing = true;
             try {
-                const url = await getViewerUrl({ recordId: contextRecordId, path: row.path });
+                // Use the new watermarked viewer URL method that waits for KRNL + on-chain confirmation
+                const url = await getWatermarkedViewerUrlForDirectUpload({
+                    blockchainDocId: row.id,
+                    path: row.path,
+                    accessType: 'view'
+                });
 
                 if (!url) {
                     throw new Error('Backend did not return a viewer URL');
                 }
 
+                this.showToast('Success', 'Access logged on-chain. Opening document...', 'success');
+
+                // eslint-disable-next-line no-console
+                console.log('Opening document viewer URL:', url);
+
+                // Try to open in new window, fall back to same window if popup blocked
                 // eslint-disable-next-line no-undef
-                window.open(url, '_blank');
+                const newWindow = window.open(url, '_blank');
+                if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                    // Popup blocked - open in same window
+                    // eslint-disable-next-line no-console
+                    console.warn('Popup blocked, opening in same window');
+                    // eslint-disable-next-line no-undef
+                    window.location.href = url;
+                }
             } catch (error) {
                 // eslint-disable-next-line no-console
                 console.error('Failed to open uploaded document', error);
                 this.showToast('Error', error.message || 'Failed to open uploaded document', 'error');
+            } finally {
+                this.isProcessing = false;
             }
         } else {
             // Register for non-registered documents
@@ -321,35 +342,54 @@ export default class DocumentAccessTracker extends LightningElement {
 
             this.isProcessing = true;
             try {
-                await registerDocumentOnBlockchain({ blockchainDocId: row.id });
+                const success = await registerDocumentOnBlockchain({ blockchainDocId: row.id });
+
+                if (!success) {
+                    throw new Error('Apex registration method returned false');
+                }
 
                 this.showToast(
                     'Success',
-                    'Document registration queued. Refreshing status...',
+                    'Document registration submitted. Waiting for confirmation...',
                     'success'
                 );
 
-                // Refresh uploads and stats after manual registration
-                const promises = [
-                    getComplianceStats()
-                ];
+                // Give the backend/queueable a few seconds to complete the transaction,
+                // then refresh compliance stats and uploads.
+                setTimeout(async () => {
+                    try {
+                        const promises = [
+                            getComplianceStats()
+                        ];
 
-                if (this.recordId) {
-                    promises.push(getUploadsForRecord({ recordId: this.recordId }));
-                }
+                        if (this.recordId) {
+                            promises.push(getUploadsForRecord({ recordId: this.recordId }));
+                        }
 
-                const results = await Promise.all(promises);
+                        const results = await Promise.all(promises);
 
-                const stats = results[0];
-                const uploads = this.recordId && results.length > 1 ? results[1] : [];
+                        const stats = results[0];
+                        const uploads = this.recordId && results.length > 1 ? results[1] : [];
 
-                this.complianceStats = stats || this.complianceStats;
-                this.uploads = this.decorateUploads(uploads || []);
+                        this.complianceStats = stats || this.complianceStats;
+                        this.uploads = this.decorateUploads(uploads || []);
+
+                        this.showToast(
+                            'Success',
+                            'Dashboard refreshed - check document status',
+                            'success'
+                        );
+                    } catch (refreshError) {
+                        // eslint-disable-next-line no-console
+                        console.error('Failed to refresh after manual registration', refreshError);
+                    } finally {
+                        this.isProcessing = false;
+                    }
+                }, 5000);
             } catch (error) {
                 // eslint-disable-next-line no-console
                 console.error('Failed to register document from row action', error);
                 this.showToast('Error', 'Failed to register document on blockchain', 'error');
-            } finally {
                 this.isProcessing = false;
             }
         }

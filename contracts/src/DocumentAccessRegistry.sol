@@ -31,6 +31,8 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
         string accessType; // "view", "download", "modify"
         string ipAddress;
         string userAgent;
+        string documentId;
+        bytes32 accessHash;
     }
 
     struct DocumentRegistrationParams {
@@ -42,6 +44,7 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
     struct DocumentAccessParams {
         string accessType;
         string documentHash;
+        string documentId;
         string ipAddress;
         string salesforceUserId;
         string userAgent;
@@ -64,10 +67,12 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
     );
 
     event DocumentAccessLogged(
-        string indexed documentHash,
+        string documentHash,
         address accessor,
         string salesforceUserId,
         string accessType,
+        string documentId,
+        bytes32 accessHash,
         uint256 timestamp
     );
 
@@ -83,6 +88,8 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
         uint256 timestamp
     );
 
+    event AuthDataResultDebug(bytes authDataResult);
+
     constructor(
         address _admin,
         address _authKey,
@@ -95,21 +102,26 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
     }
 
     /**
+     * @dev Deterministically compute an access hash for a document access event.
+     * The hash binds together the file identifier, Salesforce user, timestamp,
+     * and access type. This function is pure and can be called off-chain to
+     * verify or recompute the expected access hash.
+     */
+    function computeAccessHash(
+        string memory documentId,
+        string memory salesforceUserId,
+        uint256 timestamp,
+        string memory accessType
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encode(documentId, salesforceUserId, timestamp, accessType));
+    }
+
+    /**
      * @dev Register a new document in the blockchain registry
      * @param _documentHash SHA-256 hash of the document
      * @param _salesforceRecordId Salesforce record ID for the document
      * @param _metadata JSON metadata about the document
      */
-    function registerDocumentKRNL(
-        AuthData calldata authData
-    ) external requireAuth(authData) whenNotPaused {
-        DocumentRegistrationParams memory params = abi.decode(
-            authData.result,
-            (DocumentRegistrationParams)
-        );
-
-        _registerDocument(params.documentHash, params.salesforceRecordId, params.metadata);
-    }
 
     function registerDocumentDirect(
         string memory _documentHash,
@@ -153,6 +165,7 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
     function logDocumentAccessKRNL(
         AuthData calldata authData
     ) external requireAuth(authData) whenNotPaused {
+
         DocumentAccessParams memory params = abi.decode(
             authData.result,
             (DocumentAccessParams)
@@ -163,7 +176,8 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
             params.salesforceUserId,
             params.accessType,
             params.ipAddress,
-            params.userAgent
+            params.userAgent,
+            params.documentId
         );
     }
 
@@ -172,7 +186,8 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
         string memory _salesforceUserId,
         string memory _accessType,
         string memory _ipAddress,
-        string memory _userAgent
+        string memory _userAgent,
+        string memory _documentId
     ) internal {
         require(documentExists(_documentHash), "Document not registered");
         require(documents[_documentHash].isActive, "Document is not active");
@@ -182,14 +197,19 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
             "Unauthorized to log access"
         );
 
+        uint256 ts = block.timestamp;
+        bytes32 accessHash = computeAccessHash(_documentId, _salesforceUserId, ts, _accessType);
+
         AccessLog memory newLog = AccessLog({
             documentHash: _documentHash,
             accessor: msg.sender,
             salesforceUserId: _salesforceUserId,
-            accessTimestamp: block.timestamp,
+            accessTimestamp: ts,
             accessType: _accessType,
             ipAddress: _ipAddress,
-            userAgent: _userAgent
+            userAgent: _userAgent,
+            documentId: _documentId,
+            accessHash: accessHash
         });
 
         documentAccessLogs[_documentHash].push(newLog);
@@ -199,7 +219,9 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
             msg.sender,
             _salesforceUserId,
             _accessType,
-            block.timestamp
+            _documentId,
+            accessHash,
+            ts
         );
     }
 

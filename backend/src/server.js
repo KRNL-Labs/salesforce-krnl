@@ -318,6 +318,162 @@ app.post('/api/files/upload', rawFileBody, async (req, res) => {
   }
 });
 
+// Document viewer endpoint with JWT token authentication
+// Accepts a time-limited JWT token from /api/access, retrieves file from Supabase,
+// watermarks PDFs with the on-chain accessHash, and streams the content
+app.get('/api/view', async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Access token is required'
+      });
+    }
+
+    // Verify and decode JWT token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key-for-development');
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid or expired access token'
+      });
+    }
+
+    const { documentHash, sessionId } = decoded;
+
+    if (!documentHash || !sessionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid token payload'
+      });
+    }
+
+    // Get the KRNL service to retrieve session with documentId and accessHash
+    const KRNLService = require('./services/krnlService');
+    const krnlService = new KRNLService();
+    
+    let session;
+    try {
+      const statusResult = await krnlService.getWorkflowStatus(sessionId);
+      session = krnlService.sessions.get(sessionId);
+      
+      if (!session || !session.documentId || !statusResult.accessHash) {
+        return res.status(404).json({
+          success: false,
+          error: 'Session not found or missing file path/accessHash'
+        });
+      }
+    } catch (err) {
+      logger.warn('Failed to retrieve session for viewer', { sessionId, error: err.message });
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found or expired'
+      });
+    }
+
+    // Prefer the explicit file path captured at workflow start; fall back to
+    // on-chain documentId/recordId for older sessions.
+    const filePath = session.documentPath || session.documentId || session.recordId;
+    const accessHash = session.accessHash || 'pending';
+
+    logger.info('Document viewer accessed', {
+      documentHash,
+      sessionId,
+      filePath,
+      accessHash: accessHash.substring(0, 10) + '...'
+    });
+
+    // Retrieve file from Supabase
+    const { getSupabaseFileBuffer } = require('./services/fileStorageService_s3');
+    const { buffer, contentType, fileName } = await getSupabaseFileBuffer(filePath);
+
+    // If PDF, watermark it with the accessHash
+    if (contentType === 'application/pdf' || fileName?.endsWith('.pdf')) {
+      const { PDFDocument, rgb, degrees, StandardFonts } = require('pdf-lib');
+      
+      const pdfDoc = await PDFDocument.load(buffer);
+      const pages = pdfDoc.getPages();
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      
+      // Watermark text: full hash only
+      const watermarkText = accessHash;
+      
+      for (const page of pages) {
+        const { width, height } = page.getSize();
+        
+        // Calculate diagonal and font size to span corner to corner
+        const diagonal = Math.sqrt(width * width + height * height);
+        const margin = 100;
+        const targetLength = Math.max(0, diagonal - 2 * margin);
+        
+        // Calculate font size based on text length
+        const baseWidth = font.widthOfTextAtSize(watermarkText, 1);
+        let fontSize = baseWidth > 0 ? targetLength / baseWidth : 20;
+        fontSize = Math.max(14, Math.min(28, fontSize));
+        
+        // Measure actual text dimensions
+        const textWidth = font.widthOfTextAtSize(watermarkText, fontSize);
+        const textHeight = font.heightAtSize(fontSize);
+        
+        // For 45-degree rotation, calculate position so text center aligns with page center
+        // When rotated, we need to account for both x and y offsets
+        const angleRad = Math.PI / 4; // 45 degrees
+        const cos45 = Math.cos(angleRad);
+        const sin45 = Math.sin(angleRad);
+        
+        // Calculate the center of the page
+        const pageCenterX = width / 2;
+        const pageCenterY = height / 2;
+        
+        // Calculate text center point (before rotation)
+        const textCenterX = textWidth / 2;
+        const textCenterY = textHeight / 2;
+        
+        // Apply rotation transformation to text center
+        // Then calculate starting position so rotated text center aligns with page center
+        const rotatedCenterX = textCenterX * cos45 - textCenterY * sin45;
+        const rotatedCenterY = textCenterX * sin45 + textCenterY * cos45;
+        
+        const x = pageCenterX - rotatedCenterX;
+        const y = pageCenterY - rotatedCenterY;
+        
+        page.drawText(watermarkText, {
+          x,
+          y,
+          size: fontSize,
+          font,
+          color: rgb(0.5, 0.5, 0.5),
+          opacity: 0.3,
+          rotate: degrees(45)
+        });
+      }
+      
+      const watermarkedPdfBytes = await pdfDoc.save();
+      
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${fileName || 'document.pdf'}"`);
+      return res.send(Buffer.from(watermarkedPdfBytes));
+    }
+
+    // For non-PDF files, stream as-is
+    res.setHeader('Content-Type', contentType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName || 'document'}"`);
+    res.send(buffer);
+
+  } catch (error) {
+    logger.error('Document viewer error', { error: error.message, stack: error.stack });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to process viewer request',
+      details: error.message
+    });
+  }
+});
+
 // Viewer URL endpoint for Supabase-backed files
 // Accepts a file path (and optional recordId for logging) and returns a short-lived signed URL
 app.post('/api/files/viewer-url', validateSalesforceToken, async (req, res) => {

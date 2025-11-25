@@ -56,6 +56,150 @@ public with sharing class DocumentAccessLogger {
     }
 
     /**
+     * @description Log access for a direct-uploaded document backed by Blockchain_Document__c
+     * @param blockchainDocId Blockchain_Document__c ID
+     * @param accessType Type of access (view, download, modify)
+     * @return Boolean true if logged successfully
+     */
+    @AuraEnabled
+    public static Boolean logDirectUploadAccess(Id blockchainDocId, String accessType) {
+        if (blockchainDocId == null || String.isBlank(accessType)) {
+            throw new DocumentAccessLogger.DocumentAccessException('Invalid parameters for direct upload access logging');
+        }
+
+        try {
+            Blockchain_Document__c blockchainDoc = [
+                SELECT Id, Document_ID__c, Document_Hash__c
+                FROM Blockchain_Document__c
+                WHERE Id = :blockchainDocId
+                LIMIT 1
+            ];
+
+            Id userId = UserInfo.getUserId();
+
+            Document_Access_Log__c accessLog = new Document_Access_Log__c(
+                Document_ID__c = blockchainDoc.Document_ID__c,
+                Document_Hash__c = blockchainDoc.Document_Hash__c,
+                Access_Type__c = accessType,
+                User_ID__c = userId,
+                Access_Timestamp__c = Datetime.now(),
+                IP_Address__c = getClientIP(),
+                User_Agent__c = getUserAgent(),
+                Status__c = 'Pending'
+            );
+
+            insert accessLog;
+
+            if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+                System.enqueueJob(new BlockchainLogger(accessLog.Id, blockchainDoc.Document_Hash__c, accessType, userId));
+            } else {
+                accessLog.Status__c = 'Queued for Blockchain';
+                update accessLog;
+            }
+
+            return true;
+
+        } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to log direct upload access: ' + e.getMessage());
+            throw new DocumentAccessLogger.DocumentAccessException('Failed to log direct upload access: ' + e.getMessage());
+        }
+    }
+
+    /**
+     * @description Get a watermarked viewer URL for a direct-upload document.
+     * This method synchronously logs document access via KRNL, waits for on-chain
+     * confirmation, and returns a watermarked viewer URL incorporating the access hash.
+     * @param blockchainDocId Blockchain_Document__c ID
+     * @param path Supabase storage path for the file (e.g. <recordId>/<fileName>)
+     * @param accessType Type of access (view, download, modify)
+     * @return String watermarked viewer URL that can be opened in the browser
+     */
+    @AuraEnabled
+    public static String getWatermarkedViewerUrlForDirectUpload(Id blockchainDocId, String path, String accessType) {
+        if (blockchainDocId == null || String.isBlank(path) || String.isBlank(accessType)) {
+            throw new DocumentAccessException('blockchainDocId, path, and accessType are required');
+        }
+
+        try {
+            // Query Blockchain_Document__c to get document hash and record ID
+            Blockchain_Document__c blockchainDoc = [
+                SELECT Id, Document_ID__c, Document_Hash__c
+                FROM Blockchain_Document__c
+                WHERE Id = :blockchainDocId
+                LIMIT 1
+            ];
+
+            Id userId = UserInfo.getUserId();
+            String clientIP = getClientIP();
+            String userAgent = getUserAgent();
+
+            // Call KRNL backend /api/access to log access and wait for on-chain confirmation
+            HttpRequest req = new HttpRequest();
+            Http http = new Http();
+
+            String baseEndpoint = 'callout:' + BLOCKCHAIN_ENDPOINT;
+            req.setEndpoint(baseEndpoint + '/api/access');
+            req.setMethod('POST');
+            req.setHeader('Content-Type', 'application/json');
+            req.setHeader('Accept', 'application/json');
+            req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+            req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+            req.setTimeout(120000); // 2 minutes to allow for KRNL workflow + on-chain confirmation
+
+            Map<String, Object> payload = new Map<String, Object>{
+                'documentHash' => blockchainDoc.Document_Hash__c,
+                'recordId' => (String)blockchainDoc.Document_ID__c,
+                'userId' => (String)userId,
+                'accessType' => accessType,
+                'clientIP' => clientIP,
+                'userAgent' => userAgent,
+                'documentId' => path
+            };
+            req.setBody(JSON.serialize(payload));
+
+            HTTPResponse res = http.send(req);
+            Integer status = res.getStatusCode();
+
+            if (status >= 200 && status < 300) {
+                Map<String, Object> body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+                
+                // Extract viewerUrl and accessHash from response
+                String viewerUrl = body.containsKey('viewerUrl') ? (String)body.get('viewerUrl') : null;
+                String accessHash = body.containsKey('accessHash') ? (String)body.get('accessHash') : null;
+                String txHash = body.containsKey('txHash') ? (String)body.get('txHash') : null;
+
+                // Optionally create/update Document_Access_Log__c with status and accessHash
+                Document_Access_Log__c accessLog = new Document_Access_Log__c(
+                    Document_ID__c = blockchainDoc.Document_ID__c,
+                    Document_Hash__c = blockchainDoc.Document_Hash__c,
+                    Access_Type__c = accessType,
+                    User_ID__c = userId,
+                    Access_Timestamp__c = Datetime.now(),
+                    IP_Address__c = clientIP,
+                    User_Agent__c = userAgent,
+                    Status__c = 'Logged to Blockchain',
+                    Blockchain_Response__c = res.getBody()
+                );
+                insert accessLog;
+
+                if (String.isBlank(viewerUrl)) {
+                    throw new DocumentAccessException('Backend did not return a viewerUrl');
+                }
+
+                return viewerUrl;
+            } else {
+                throw new DocumentAccessException(
+                    'Access logging failed (' + status + '): ' + res.getBody()
+                );
+            }
+
+        } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to get watermarked viewer URL: ' + e.getMessage());
+            throw new DocumentAccessException('Failed to get watermarked viewer URL: ' + e.getMessage());
+        }
+    }
+
+    /**
      * @description Get a short-lived viewer URL for a Supabase-backed file from the KRNL backend
      * @param recordId Salesforce record ID associated with the file (for logging and context)
      * @param path Supabase storage path for the file (e.g. <recordId>/<fileName>)
@@ -383,13 +527,15 @@ public with sharing class DocumentAccessLogger {
                 ];
 
                 // Call KRNL backend /api/access via callout
+                // Note: documentId should ideally be the file path; here we use recordId as a fallback
                 Map<String, Object> payload = new Map<String, Object>{
                     'documentHash' => documentHash,
                     'recordId' => (String)accessLogRecord.Document_ID__c,
                     'userId' => (String)userId,
                     'accessType' => accessType,
                     'clientIP' => accessLogRecord.IP_Address__c,
-                    'userAgent' => accessLogRecord.User_Agent__c
+                    'userAgent' => accessLogRecord.User_Agent__c,
+                    'documentId' => (String)accessLogRecord.Document_ID__c
                 };
 
                 String result = callBlockchainAPI('logAccess', payload);
