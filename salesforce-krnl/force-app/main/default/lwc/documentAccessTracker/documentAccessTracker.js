@@ -5,6 +5,7 @@ import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRece
 import getUploadsForRecord from '@salesforce/apex/DocumentAccessController.getUploadsForRecord';
 import getViewerUrl from '@salesforce/apex/DocumentAccessLogger.getViewerUrl';
 import getWatermarkedViewerUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getWatermarkedViewerUrlForDirectUpload';
+import getViewerSessionUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getViewerSessionUrlForDirectUpload';
 import registerDocumentOnBlockchain from '@salesforce/apex/DocumentAccessLogger.registerDocumentOnBlockchain';
 import logDirectUploadAccess from '@salesforce/apex/DocumentAccessLogger.logDirectUploadAccess';
 
@@ -36,7 +37,8 @@ export default class DocumentAccessTracker extends LightningElement {
             typeAttributes: {
                 label: { fieldName: 'actionLabel' },
                 name: 'uploadAction',
-                variant: 'neutral'
+                variant: 'base',
+                disabled: { fieldName: 'isOpening' }
             }
         }
     ];
@@ -53,18 +55,31 @@ export default class DocumentAccessTracker extends LightningElement {
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit'
-            }
+            },
+            initialWidth: 180
         },
-        { label: 'Access Type', fieldName: 'accessType', type: 'text' },
-        { label: 'User', fieldName: 'userName', type: 'text' },
-        { label: 'Status', fieldName: 'status', type: 'text' },
+        { label: 'File Name', fieldName: 'fileName', type: 'text', wrapText: true, initialWidth: 200 },
+        { label: 'Access Type', fieldName: 'accessType', type: 'text', initialWidth: 100 },
+        { label: 'User', fieldName: 'userName', type: 'text', initialWidth: 150 },
+        { 
+            label: 'Access Hash', 
+            fieldName: 'accessHash', 
+            type: 'text',
+            wrapText: false,
+            cellAttributes: {
+                class: 'slds-truncate',
+                title: { fieldName: 'accessHash' }
+            },
+            initialWidth: 180
+        },
         {
             label: 'Blockchain Status',
             fieldName: 'blockchainStatus',
             type: 'text',
             cellAttributes: {
                 class: { fieldName: 'blockchainStatusClass' }
-            }
+            },
+            initialWidth: 150
         }
     ];
 
@@ -108,7 +123,9 @@ export default class DocumentAccessTracker extends LightningElement {
                 userName: log.userName,
                 status: log.status,
                 blockchainStatus: log.blockchainStatus,
-                blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus)
+                blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus),
+                fileName: log.fileName || '',
+                accessHash: log.accessHash || 'N/A'
             }));
 
             this.uploads = this.decorateUploads(uploads);
@@ -257,9 +274,28 @@ export default class DocumentAccessTracker extends LightningElement {
             const isRegistered = u.blockchainStatus === 'Registered';
             return {
                 ...u,
-                actionLabel: isRegistered ? 'View / Download' : 'Register'
+                actionLabel: isRegistered ? 'View' : 'Register',
+                isOpening: false
             };
         });
+    }
+
+    setUploadOpeningState(rowId, isOpening) {
+        this.uploads = (this.uploads || []).map((u) => {
+            if (u.id !== rowId) {
+                return u;
+            }
+            const isRegistered = u.blockchainStatus === 'Registered';
+            return {
+                ...u,
+                isOpening,
+                actionLabel: isOpening ? 'Opening…' : (isRegistered ? 'View' : 'Register')
+            };
+        });
+    }
+
+    renderViewerPlaceholder(win, fileName) {
+        // No-op: the secure viewer now owns its own loading UI.
     }
 
     getBlockchainStatusClass(status) {
@@ -298,10 +334,9 @@ export default class DocumentAccessTracker extends LightningElement {
                 return;
             }
 
-            this.isProcessing = true;
             try {
-                // Use the new watermarked viewer URL method that waits for KRNL + on-chain confirmation
-                const url = await getWatermarkedViewerUrlForDirectUpload({
+                this.setUploadOpeningState(row.id, true);
+                const url = await getViewerSessionUrlForDirectUpload({
                     blockchainDocId: row.id,
                     path: row.path,
                     accessType: 'view'
@@ -311,27 +346,28 @@ export default class DocumentAccessTracker extends LightningElement {
                     throw new Error('Backend did not return a viewer URL');
                 }
 
-                this.showToast('Success', 'Access logged on-chain. Opening document...', 'success');
+                this.showToast('Success', 'Opening secure viewer...', 'success');
 
                 // eslint-disable-next-line no-console
                 console.log('Opening document viewer URL:', url);
 
-                // Try to open in new window, fall back to same window if popup blocked
                 // eslint-disable-next-line no-undef
                 const newWindow = window.open(url, '_blank');
                 if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-                    // Popup blocked - open in same window
                     // eslint-disable-next-line no-console
-                    console.warn('Popup blocked, opening in same window');
-                    // eslint-disable-next-line no-undef
-                    window.location.href = url;
+                    console.warn('Popup blocked, secure viewer could not be opened in a new tab');
+                    this.showToast(
+                        'Warning',
+                        'Browser blocked the secure viewer pop-up. Please allow pop-ups and try again.',
+                        'warning'
+                    );
                 }
             } catch (error) {
                 // eslint-disable-next-line no-console
                 console.error('Failed to open uploaded document', error);
                 this.showToast('Error', error.message || 'Failed to open uploaded document', 'error');
             } finally {
-                this.isProcessing = false;
+                this.setUploadOpeningState(row.id, false);
             }
         } else {
             // Register for non-registered documents

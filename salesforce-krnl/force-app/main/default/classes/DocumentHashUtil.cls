@@ -51,9 +51,10 @@ public with sharing class DocumentHashUtil {
                 LIMIT 1
             ];
 
-            // Create metadata object
+            // Create metadata object (include fileName for UI/registry consumers)
             Map<String, Object> metadata = new Map<String, Object>{
                 'title' => cv.Title,
+                'fileName' => cv.Title,
                 'extension' => cv.FileExtension,
                 'size' => cv.ContentSize,
                 'createdDate' => cv.CreatedDate.format('yyyy-MM-dd\'T\'HH:mm:ss\'Z\''),
@@ -111,6 +112,7 @@ public with sharing class DocumentHashUtil {
             return new Map<String, Object>{
                 'salesforceId' => contentDocumentId,
                 'title' => cd.Title,
+                'fileName' => cd.Title,
                 'fileType' => cd.FileType,
                 'size' => cd.ContentSize,
                 'createdDate' => cd.CreatedDate.format('yyyy-MM-dd\'T\'HH:mm:ss\'Z\''),
@@ -151,6 +153,7 @@ public with sharing class DocumentHashUtil {
             try {
                 Map<String, Object> metadata = new Map<String, Object>{
                     'title' => cv.Title,
+                    'fileName' => cv.Title,
                     'extension' => cv.FileExtension,
                     'size' => cv.ContentSize,
                     'createdDate' => cv.CreatedDate.format('yyyy-MM-dd\'T\'HH:mm:ss\'Z\''),

@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 const { logger } = require('./utils/logger');
 const complianceRouter = require('./controllers/complianceController');
 const accessRouter = require('./controllers/accessController');
@@ -37,6 +38,68 @@ app.use((req, res, next) => {
     ip: req.ip
   });
   next();
+});
+
+// Static assets for secure viewer: serve pdf.js (once installed) and viewer JS/CSS from this app
+// These paths are compatible with a strict Content-Security-Policy of script-src 'self'.
+// __dirname is /src, so public assets live in ../public at the project root.
+app.use('/pdfjs', express.static(path.join(__dirname, '../node_modules/pdfjs-dist/build')));
+app.use(express.static(path.join(__dirname, '../public')));
+
+// Secure HTML viewer that wraps /api/view. This page only references same-origin scripts
+// (no inline JS, no external CDNs) so it respects script-src 'self'.
+app.get('/secure-viewer', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Secure Document Viewer</title>
+  <link rel="stylesheet" href="/secure-viewer.css" />
+</head>
+<body>
+  <div id="root">
+    <div id="toolbar">
+      <div id="title">Secure Document Viewer</div>
+      <div>
+        <span id="expiry" style="margin-right: 8px; font-size: 12px; opacity: 0.8;"></span>
+        <button id="themeToggle" type="button">Dark mode</button>
+      </div>
+    </div>
+    <div id="content">
+      <div id="loadingState">
+        <div class="spinner"></div>
+        <div id="loadingLabel" class="loading-label">Loading document...</div>
+      </div>
+      <div id="message"></div>
+      <div id="canvas-container">
+        <canvas id="pdfCanvas"></canvas>
+      </div>
+
+      <div id="passwordOverlay">
+        <div class="password-dialog">
+          <div class="password-title">Password required</div>
+          <div class="password-subtitle">This document is protected. Enter the password to continue.</div>
+          <div class="password-input-row">
+            <input id="passwordInput" type="password" autocomplete="off" placeholder="Enter password" />
+            <button id="passwordToggle" type="button" aria-label="Show password">Show</button>
+          </div>
+          <div id="passwordError" class="password-error"></div>
+          <div class="password-actions">
+            <button id="passwordSubmit" type="button">Unlock</button>
+          </div>
+        </div>
+      </div>
+      <div id="screenshotShield">
+        <div class="shield-noise"></div>
+        <div class="shield-message">Protected document screenshots are not allowed</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/secure-viewer.js"></script>
+</body>
+</html>`);
 });
 
 // KRNL API routers (Salesforce integrations)
@@ -343,7 +406,14 @@ app.get('/api/view', async (req, res) => {
       });
     }
 
-    const { documentHash, sessionId } = decoded;
+    const {
+      documentHash,
+      sessionId,
+      documentId: tokenDocumentId,
+      documentPath: tokenDocumentPath,
+      recordId: tokenRecordId,
+      accessHash: tokenAccessHash
+    } = decoded;
 
     if (!documentHash || !sessionId) {
       return res.status(400).json({
@@ -352,33 +422,55 @@ app.get('/api/view', async (req, res) => {
       });
     }
 
-    // Get the KRNL service to retrieve session with documentId and accessHash
-    const KRNLService = require('./services/krnlService');
-    const krnlService = new KRNLService();
-    
-    let session;
-    try {
-      const statusResult = await krnlService.getWorkflowStatus(sessionId);
-      session = krnlService.sessions.get(sessionId);
-      
-      if (!session || !session.documentId || !statusResult.accessHash) {
-        return res.status(404).json({
-          success: false,
-          error: 'Session not found or missing file path/accessHash'
-        });
+    // Start by trusting the file path and accessHash embedded in the token.
+    let filePath = tokenDocumentPath || tokenDocumentId || tokenRecordId || null;
+    let accessHash = tokenAccessHash || null;
+
+    // For older tokens (or if claims are missing), fall back to KRNL
+    // in-memory sessions to resolve filePath/accessHash.
+    if (!filePath || !accessHash) {
+      const KRNLService = require('./services/krnlService');
+      const krnlService = new KRNLService();
+
+      let session;
+      try {
+        const statusResult = await krnlService.getWorkflowStatus(sessionId);
+        session = krnlService.sessions.get(sessionId);
+
+        const sessionFilePath = session && (session.documentPath || session.documentId || session.recordId);
+        const sessionAccessHash = (session && session.accessHash) || (statusResult && statusResult.accessHash) || null;
+
+        if (!sessionFilePath || !sessionAccessHash) {
+          return res.status(404).json({
+            success: false,
+            error: 'Session not found or missing file path/accessHash'
+          });
+        }
+
+        filePath = filePath || sessionFilePath;
+        accessHash = accessHash || sessionAccessHash;
+      } catch (err) {
+        logger.warn('Failed to retrieve session for viewer', { sessionId, error: err.message });
+
+        // If we still don't have enough information to serve the file, treat
+        // this as an expired session. Otherwise, fall through and use the
+        // token-derived values we already have.
+        if (!filePath || !accessHash) {
+          return res.status(404).json({
+            success: false,
+            error: 'Session not found or expired'
+          });
+        }
       }
-    } catch (err) {
-      logger.warn('Failed to retrieve session for viewer', { sessionId, error: err.message });
-      return res.status(404).json({
-        success: false,
-        error: 'Session not found or expired'
-      });
     }
 
-    // Prefer the explicit file path captured at workflow start; fall back to
-    // on-chain documentId/recordId for older sessions.
-    const filePath = session.documentPath || session.documentId || session.recordId;
-    const accessHash = session.accessHash || 'pending';
+    // At this point we must have a filePath and accessHash to proceed.
+    if (!filePath || !accessHash) {
+      return res.status(404).json({
+        success: false,
+        error: 'Session not found or missing file path/accessHash'
+      });
+    }
 
     logger.info('Document viewer accessed', {
       documentHash,
@@ -391,72 +483,99 @@ app.get('/api/view', async (req, res) => {
     const { getSupabaseFileBuffer } = require('./services/fileStorageService_s3');
     const { buffer, contentType, fileName } = await getSupabaseFileBuffer(filePath);
 
-    // If PDF, watermark it with the accessHash
+    // If PDF, try to watermark it with the accessHash. If anything fails
+    // (including encrypted PDFs), fall back to streaming the original file.
     if (contentType === 'application/pdf' || fileName?.endsWith('.pdf')) {
-      const { PDFDocument, rgb, degrees, StandardFonts } = require('pdf-lib');
-      
-      const pdfDoc = await PDFDocument.load(buffer);
-      const pages = pdfDoc.getPages();
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      
-      // Watermark text: full hash only
-      const watermarkText = accessHash;
-      
-      for (const page of pages) {
-        const { width, height } = page.getSize();
-        
-        // Calculate diagonal and font size to span corner to corner
-        const diagonal = Math.sqrt(width * width + height * height);
-        const margin = 100;
-        const targetLength = Math.max(0, diagonal - 2 * margin);
-        
-        // Calculate font size based on text length
-        const baseWidth = font.widthOfTextAtSize(watermarkText, 1);
-        let fontSize = baseWidth > 0 ? targetLength / baseWidth : 20;
-        fontSize = Math.max(14, Math.min(28, fontSize));
-        
-        // Measure actual text dimensions
-        const textWidth = font.widthOfTextAtSize(watermarkText, fontSize);
-        const textHeight = font.heightAtSize(fontSize);
-        
-        // For 45-degree rotation, calculate position so text center aligns with page center
-        // When rotated, we need to account for both x and y offsets
-        const angleRad = Math.PI / 4; // 45 degrees
-        const cos45 = Math.cos(angleRad);
-        const sin45 = Math.sin(angleRad);
-        
-        // Calculate the center of the page
-        const pageCenterX = width / 2;
-        const pageCenterY = height / 2;
-        
-        // Calculate text center point (before rotation)
-        const textCenterX = textWidth / 2;
-        const textCenterY = textHeight / 2;
-        
-        // Apply rotation transformation to text center
-        // Then calculate starting position so rotated text center aligns with page center
-        const rotatedCenterX = textCenterX * cos45 - textCenterY * sin45;
-        const rotatedCenterY = textCenterX * sin45 + textCenterY * cos45;
-        
-        const x = pageCenterX - rotatedCenterX;
-        const y = pageCenterY - rotatedCenterY;
-        
-        page.drawText(watermarkText, {
-          x,
-          y,
-          size: fontSize,
-          font,
-          color: rgb(0.5, 0.5, 0.5),
-          opacity: 0.3,
-          rotate: degrees(45)
+      try {
+        const { PDFDocument, rgb, degrees, StandardFonts } = require('pdf-lib');
+
+        // Use ignoreEncryption so encrypted PDFs can still be loaded. If
+        // this or any later step fails, we will just stream the original.
+        const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+        const pages = pdfDoc.getPages();
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+        // Watermark text: full hash only
+        const watermarkText = accessHash;
+        const forensicText = `KRNL:${accessHash}:${documentHash || ''}:${sessionId || ''}`;
+
+        for (const page of pages) {
+          const { width, height } = page.getSize();
+
+          // Calculate diagonal and font size to span corner to corner
+          const diagonal = Math.sqrt(width * width + height * height);
+          const margin = 100;
+          const targetLength = Math.max(0, diagonal - 2 * margin);
+
+          // Calculate font size based on text length
+          const baseWidth = font.widthOfTextAtSize(watermarkText, 1);
+          let fontSize = baseWidth > 0 ? targetLength / baseWidth : 20;
+          fontSize = Math.max(14, Math.min(28, fontSize * 0.95));
+
+          // Measure actual text dimensions
+          const textWidth = font.widthOfTextAtSize(watermarkText, fontSize);
+          const textHeight = font.heightAtSize(fontSize);
+
+          // For 45-degree rotation, calculate position so text center aligns with page center
+          // When rotated, we need to account for both x and y offsets
+          const angleRad = Math.PI / 4; // 45 degrees
+          const cos45 = Math.cos(angleRad);
+          const sin45 = Math.sin(angleRad);
+
+          // Calculate the center of the page
+          const pageCenterX = width / 2;
+          const pageCenterY = height / 2;
+
+          // Calculate text center point (before rotation)
+          const textCenterX = textWidth / 2;
+          const textCenterY = textHeight / 2;
+
+          // Apply rotation transformation to text center
+          // Then calculate starting position so rotated text center aligns with page center
+          const rotatedCenterX = textCenterX * cos45 - textCenterY * sin45;
+          const rotatedCenterY = textCenterX * sin45 + textCenterY * cos45;
+
+          const x = pageCenterX - rotatedCenterX;
+          const y = pageCenterY - rotatedCenterY;
+
+          page.drawText(watermarkText, {
+            x,
+            y,
+            size: fontSize,
+            font,
+            color: rgb(0.5, 0.5, 0.5),
+            opacity: 0.3,
+            rotate: degrees(45)
+          });
+
+          page.drawText(forensicText, {
+            x: 16,
+            y: 16,
+            size: 6,
+            font,
+            color: rgb(1, 1, 1),
+            opacity: 0.02,
+            rotate: degrees(0)
+          });
+        }
+
+        const watermarkedPdfBytes = await pdfDoc.save();
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${fileName || 'document.pdf'}"`);
+        return res.send(Buffer.from(watermarkedPdfBytes));
+      } catch (err) {
+        // Watermarking is mandatory. If we cannot safely watermark the PDF
+        // (for example, because it is encrypted or malformed), do NOT stream
+        // the original document. Instead, return a clear error so the caller
+        // knows this document cannot be viewed.
+        logger.warn('Failed to watermark PDF; blocking viewer', { error: err.message });
+        return res.status(422).json({
+          success: false,
+          error: 'Unable to watermark PDF document',
+          details: err.message || 'The PDF may be encrypted or unsupported. Upload an unencrypted copy to view it.'
         });
       }
-      
-      const watermarkedPdfBytes = await pdfDoc.save();
-      
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${fileName || 'document.pdf'}"`);
-      return res.send(Buffer.from(watermarkedPdfBytes));
     }
 
     // For non-PDF files, stream as-is

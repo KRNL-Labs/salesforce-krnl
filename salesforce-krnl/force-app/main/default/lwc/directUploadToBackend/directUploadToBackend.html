@@ -1,45 +1,52 @@
 <template>
-    <lightning-card title="Direct Upload to Backend" icon-name="custom:custom63">
-        <div class="slds-p-around_medium">
+    <div class="slds-grid slds-wrap slds-gutters_small slds-grid_vertical-align-center">
+        <div class="slds-col slds-size_1-of-1 slds-medium-size_2-of-3">
             <lightning-input
                 type="file"
                 label="Select file"
                 onchange={handleFileChange}
             ></lightning-input>
 
+            <div class="slds-m-top_small">
+                <lightning-button
+                    label="Upload"
+                    variant="brand"
+                    onclick={handleUpload}
+                    disabled={isUploading}
+                ></lightning-button>
+            </div>
+
             <template if:true={fileName}>
-                <p class="slds-m-top_small">Selected file: {fileName}</p>
+                <p class="slds-m-top_x-small slds-text-color_weak slds-truncate" title={fileName}>
+                    {fileName}
+                </p>
             </template>
+        </div>
 
-            <lightning-button
-                class="slds-m-top_medium"
-                label="Upload to Backend"
-                variant="brand"
-                onclick={handleUpload}
-                disabled={isUploading}
-            ></lightning-button>
-
+        <div class="slds-col slds-size_1-of-1 slds-medium-size_1-of-3">
             <template if:true={hash}>
-                <div class="slds-m-top_medium">
-                    <p><strong>Hash:</strong> {hash}</p>
+                <div class="slds-box slds-theme_default">
+                    <p class="slds-text-title_caps slds-text-color_weak">Last upload</p>
+                    <p class="slds-m-top_x-small slds-truncate" title={hash}><strong>Hash:</strong> {truncatedHash}</p>
                     <template if:true={storagePath}>
-                        <p><strong>Storage path:</strong> {storagePath}</p>
+                        <p class="slds-m-top_x-small slds-truncate" title={storagePath}><strong>Path:</strong> {storagePath}</p>
                         <lightning-button
-                            class="slds-m-top_small"
+                            class="slds-m-top_x-small"
                             label="View / Download"
-                            variant="neutral"
+                            variant="base"
                             onclick={handleView}
                         ></lightning-button>
                     </template>
                 </div>
             </template>
         </div>
+    </div>
 
-        <template if:true={isUploading}>
-            <lightning-spinner
-                alternative-text="Uploading..."
-                size="small"
-            ></lightning-spinner>
-        </template>
-    </lightning-card>
+    <template if:true={isUploading}>
+        <lightning-spinner
+            alternative-text="Uploading..."
+            size="small">
+        </lightning-spinner>
+    </template>
+
 </template>

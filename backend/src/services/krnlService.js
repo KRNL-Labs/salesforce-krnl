@@ -897,7 +897,16 @@ class KRNLService {
    * Generate time-limited access token for document viewing
    */
   generateAccessToken(params) {
-    const { documentHash, userId, sessionId, accessType } = params;
+    const {
+      documentHash,
+      userId,
+      sessionId,
+      accessType,
+      documentId,
+      documentPath,
+      recordId,
+      accessHash
+    } = params;
     const jwt = require('jsonwebtoken');
 
     const payload = {
@@ -905,8 +914,12 @@ class KRNLService {
       userId,
       sessionId,
       accessType,
+      documentId: documentId || null,
+      documentPath: documentPath || null,
+      recordId: recordId || null,
+      accessHash: accessHash || null,
       iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (15 * 60) // 15 minutes expiry
+      exp: Math.floor(Date.now() / 1000) + (60 * 60) // 60 minutes expiry
     };
 
     const secret = process.env.JWT_SECRET || 'test_secret_for_development';

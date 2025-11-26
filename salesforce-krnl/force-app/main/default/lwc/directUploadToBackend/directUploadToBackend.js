@@ -133,6 +133,21 @@ export default class DirectUploadToBackend extends LightningElement {
         }
     }
 
+    get truncatedHash() {
+        if (!this.hash) {
+            return '';
+        }
+
+        const value = String(this.hash);
+        if (value.length <= 24) {
+            return value;
+        }
+
+        const prefix = value.slice(0, 10);
+        const suffix = value.slice(-8);
+        return `${prefix}...${suffix}`;
+    }
+
     showToast(title, message, variant) {
         const evt = new ShowToastEvent({
             title,

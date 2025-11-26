@@ -5,15 +5,16 @@
 }
 
 .slds-tile {
-    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-    border: 1px solid #dee2e6;
-    border-radius: 0.5rem;
+    background: linear-gradient(135deg, #ffffff 0%, #f3f3f3 100%);
+    border: 1px solid #dddbda;
+    border-radius: 0.25rem;
     transition: all 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
 }
 
 .slds-tile:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .slds-tile__title {
@@ -128,18 +129,18 @@ lightning-card {
     --slds-c-card-radius-border: 0.5rem;
 }
 
-/* Section headers */
-.slds-section__title {
-    background: linear-gradient(90deg, #007acc 0%, #0056b3 100%);
-    color: white;
-    padding: 0.75rem 1rem;
-    margin: 0 -1rem;
-    border-radius: 0.25rem;
-    font-weight: 600;
+/* Empty state enhancements */
+.empty-state {
+    padding: 3rem 2rem;
 }
 
-.slds-section__title .slds-truncate {
-    color: white;
+.empty-state .slds-icon-text-light {
+    opacity: 0.4;
+}
+
+.section-scroll {
+    max-height: 260px;
+    overflow-y: auto;
 }
 
 /* Animation classes */

@@ -15,7 +15,7 @@ public with sharing class DocumentAccessController {
 
         try {
             List<Blockchain_Document__c> documents = [
-                SELECT Id, Name, Document_Hash__c, Document_ID__c, Metadata__c, 
+                SELECT Id, Name, Document_Hash__c, Document_ID__c, Metadata__c, File_Name__c,
                        Registration_Timestamp__c, Blockchain_Status__c, CreatedDate, OwnerId
                 FROM Blockchain_Document__c
                 ORDER BY CreatedDate DESC
@@ -26,9 +26,11 @@ public with sharing class DocumentAccessController {
                 DocumentWrapper wrapper = new DocumentWrapper();
                 wrapper.id = doc.Id;
                 
-                // Parse fileName from Metadata__c JSON
+                // Prefer explicit File_Name__c; fall back to Metadata__c JSON
                 String fileName = 'Unknown Document';
-                if (String.isNotBlank(doc.Metadata__c)) {
+                if (String.isNotBlank(doc.File_Name__c)) {
+                    fileName = doc.File_Name__c;
+                } else if (String.isNotBlank(doc.Metadata__c)) {
                     try {
                         Map<String, Object> metadata = (Map<String, Object>) JSON.deserializeUntyped(doc.Metadata__c);
                         if (metadata.containsKey('fileName')) {
@@ -46,6 +48,7 @@ public with sharing class DocumentAccessController {
                 wrapper.lastModifiedDate = doc.Registration_Timestamp__c;
                 wrapper.ownerId = doc.OwnerId;
                 wrapper.documentHash = doc.Document_Hash__c; // Add hash for reference
+                wrapper.metadata = doc.Metadata__c;
 
                 documentWrappers.add(wrapper);
             }
@@ -125,7 +128,7 @@ public with sharing class DocumentAccessController {
             List<Blockchain_Document__c> docs = [
                 SELECT Id, Document_ID__c, Document_Hash__c,
                        Blockchain_Status__c, Registration_Timestamp__c,
-                       Metadata__c
+                       Metadata__c, File_Name__c
                 FROM Blockchain_Document__c
                 WHERE Document_ID__c = :recordId
                 ORDER BY Registration_Timestamp__c DESC
@@ -140,11 +143,12 @@ public with sharing class DocumentAccessController {
                 w.blockchainStatus = doc.Blockchain_Status__c;
                 w.registrationTimestamp = doc.Registration_Timestamp__c;
                 w.metadata = doc.Metadata__c;
+                w.fileName = doc.File_Name__c;
 
                 if (String.isNotBlank(doc.Metadata__c)) {
                     try {
                         Map<String, Object> meta = (Map<String, Object>)JSON.deserializeUntyped(doc.Metadata__c);
-                        if (meta.containsKey('fileName')) {
+                        if (String.isBlank(w.fileName) && meta.containsKey('fileName')) {
                             w.fileName = (String)meta.get('fileName');
                         }
                         if (meta.containsKey('bucket')) {
@@ -358,6 +362,26 @@ public with sharing class DocumentAccessController {
                 LIMIT :limitCount
             ];
 
+            // Collect all document IDs to query metadata
+            Set<String> documentHashes = new Set<String>();
+            for (Document_Access_Log__c log : logs) {
+                if (String.isNotBlank(log.Document_Hash__c)) {
+                    documentHashes.add(log.Document_Hash__c);
+                }
+            }
+
+            // Query document metadata, keyed by hash so we can resolve fileName
+            Map<String, Blockchain_Document__c> documentMap = new Map<String, Blockchain_Document__c>();
+            for (Blockchain_Document__c doc : [
+                SELECT Id, Document_ID__c, Document_Hash__c, Metadata__c, File_Name__c
+                FROM Blockchain_Document__c
+                WHERE Document_Hash__c IN :documentHashes
+            ]) {
+                if (String.isNotBlank(doc.Document_Hash__c)) {
+                    documentMap.put(doc.Document_Hash__c, doc);
+                }
+            }
+
             for (Document_Access_Log__c log : logs) {
                 AccessLogWrapper wrapper = new AccessLogWrapper();
                 wrapper.id = log.Id;
@@ -369,6 +393,35 @@ public with sharing class DocumentAccessController {
                 wrapper.status = log.Status__c;
                 wrapper.userName = log.CreatedBy.Name;
                 wrapper.blockchainStatus = getBlockchainStatusForLog(log);
+
+                // Parse accessHash from Blockchain_Response__c
+                if (String.isNotBlank(log.Blockchain_Response__c)) {
+                    try {
+                        Map<String, Object> response = (Map<String, Object>)JSON.deserializeUntyped(log.Blockchain_Response__c);
+                        if (response.containsKey('accessHash')) {
+                            wrapper.accessHash = (String)response.get('accessHash');
+                        }
+                    } catch (Exception e) {
+                        // Ignore parsing errors
+                    }
+                }
+
+                // Get fileName from Blockchain_Document__c, preferring File_Name__c
+                Blockchain_Document__c doc = documentMap.get(log.Document_Hash__c);
+                if (doc != null) {
+                    if (String.isNotBlank(doc.File_Name__c)) {
+                        wrapper.fileName = doc.File_Name__c;
+                    } else if (String.isNotBlank(doc.Metadata__c)) {
+                        try {
+                            Map<String, Object> metadata = (Map<String, Object>)JSON.deserializeUntyped(doc.Metadata__c);
+                            if (metadata.containsKey('fileName')) {
+                                wrapper.fileName = (String)metadata.get('fileName');
+                            }
+                        } catch (Exception e) {
+                            // Ignore parsing errors
+                        }
+                    }
+                }
 
                 logWrappers.add(wrapper);
             }
@@ -410,6 +463,7 @@ public with sharing class DocumentAccessController {
         @AuraEnabled public Datetime lastModifiedDate { get; set; }
         @AuraEnabled public Id ownerId { get; set; }
         @AuraEnabled public String documentHash { get; set; }
+        @AuraEnabled public String metadata { get; set; }
     }
 
     public class AccessLogWrapper {
@@ -426,6 +480,8 @@ public with sharing class DocumentAccessController {
         @AuraEnabled public String errorMessage { get; set; }
         @AuraEnabled public String userName { get; set; }
         @AuraEnabled public String blockchainStatus { get; set; }
+        @AuraEnabled public String fileName { get; set; }
+        @AuraEnabled public String accessHash { get; set; }
     }
 
     public class ComplianceStatsWrapper {

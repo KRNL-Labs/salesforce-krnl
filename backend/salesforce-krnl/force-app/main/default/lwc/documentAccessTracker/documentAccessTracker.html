@@ -59,6 +59,10 @@
                                     <dd class="slds-item_detail">
                                         <lightning-badge label={blockchainStatus} variant={blockchainStatusVariant}></lightning-badge>
                                     </dd>
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate">Metadata (JSON):</dt>
+                                    <dd class="slds-item_detail">
+                                        <lightning-formatted-text value={selectedDocument.metadata}></lightning-formatted-text>
+                                    </dd>
                                 </dl>
                             </div>
                         </div>

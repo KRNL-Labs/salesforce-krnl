@@ -157,6 +157,7 @@
     <nameField>
         <displayFormat>BD-{00000000}</displayFormat>
         <label>Blockchain Document Number</label>
+        <trackHistory>false</trackHistory>
         <type>AutoNumber</type>
     </nameField>
     <pluralLabel>Blockchain Documents</pluralLabel>

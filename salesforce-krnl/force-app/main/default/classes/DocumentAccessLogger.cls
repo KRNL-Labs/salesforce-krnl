@@ -200,6 +200,81 @@ public with sharing class DocumentAccessLogger {
     }
 
     /**
+     * @description Get a viewer session URL for a direct-upload document using the
+     *              session-first flow. This starts the KRNL access workflow and
+     *              returns a /secure-viewer?sessionId=... URL without waiting for
+     *              on-chain completion.
+     * @param blockchainDocId Blockchain_Document__c ID
+     * @param path Supabase storage path for the file (e.g. <recordId>/<fileName>)
+     * @param accessType Type of access (view, download, modify)
+     * @return String secure viewer session URL
+     */
+    @AuraEnabled
+    public static String getViewerSessionUrlForDirectUpload(Id blockchainDocId, String path, String accessType) {
+        if (blockchainDocId == null || String.isBlank(path) || String.isBlank(accessType)) {
+            throw new DocumentAccessException('blockchainDocId, path, and accessType are required');
+        }
+
+        try {
+            Blockchain_Document__c blockchainDoc = [
+                SELECT Id, Document_ID__c, Document_Hash__c
+                FROM Blockchain_Document__c
+                WHERE Id = :blockchainDocId
+                LIMIT 1
+            ];
+
+            Id userId = UserInfo.getUserId();
+            String clientIP = getClientIP();
+            String userAgent = getUserAgent();
+
+            HttpRequest req = new HttpRequest();
+            Http http = new Http();
+
+            String baseEndpoint = 'callout:' + BLOCKCHAIN_ENDPOINT;
+            req.setEndpoint(baseEndpoint + '/api/access/init');
+            req.setMethod('POST');
+            req.setHeader('Content-Type', 'application/json');
+            req.setHeader('Accept', 'application/json');
+            req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+            req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+            req.setTimeout(120000);
+
+            Map<String, Object> payload = new Map<String, Object>{
+                'documentHash' => blockchainDoc.Document_Hash__c,
+                'recordId' => (String)blockchainDoc.Document_ID__c,
+                'userId' => (String)userId,
+                'accessType' => accessType,
+                'clientIP' => clientIP,
+                'userAgent' => userAgent,
+                'documentId' => path
+            };
+            req.setBody(JSON.serialize(payload));
+
+            HTTPResponse res = http.send(req);
+            Integer status = res.getStatusCode();
+
+            if (status >= 200 && status < 300) {
+                Map<String, Object> body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+                String viewerSessionUrl = body.containsKey('viewerSessionUrl') ? (String)body.get('viewerSessionUrl') : null;
+
+                if (String.isBlank(viewerSessionUrl)) {
+                    throw new DocumentAccessException('Backend did not return a viewerSessionUrl');
+                }
+
+                return viewerSessionUrl;
+            } else {
+                throw new DocumentAccessException(
+                    'Access init failed (' + status + '): ' + res.getBody()
+                );
+            }
+
+        } catch (Exception e) {
+            System.debug(LoggingLevel.ERROR, 'Failed to get viewer session URL: ' + e.getMessage());
+            throw new DocumentAccessException('Failed to get viewer session URL: ' + e.getMessage());
+        }
+    }
+
+    /**
      * @description Get a short-lived viewer URL for a Supabase-backed file from the KRNL backend
      * @param recordId Salesforce record ID associated with the file (for logging and context)
      * @param path Supabase storage path for the file (e.g. <recordId>/<fileName>)
@@ -318,6 +393,7 @@ public with sharing class DocumentAccessLogger {
                         Document_Hash__c = hashResults.get(docId),
                         Blockchain_Status__c = 'Pending',
                         Registration_Timestamp__c = Datetime.now(),
+                        File_Name__c = (String)metadata.get('fileName'),
                         Metadata__c = JSON.serialize(metadata)
                     ));
                 } catch (Exception e) {
@@ -457,6 +533,7 @@ public with sharing class DocumentAccessLogger {
             Document_Hash__c = hash,
             Blockchain_Status__c = 'Pending',
             Registration_Timestamp__c = Datetime.now(),
+            File_Name__c = fileName,
             Metadata__c = metadata.isEmpty() ? null : JSON.serialize(metadata)
         );
 
