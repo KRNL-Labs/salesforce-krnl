@@ -3,6 +3,8 @@ import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import getComplianceStats from '@salesforce/apex/DocumentAccessController.getComplianceStats';
 import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
 import getUploadsForRecord from '@salesforce/apex/DocumentAccessController.getUploadsForRecord';
+import getDocumentAccessLogs from '@salesforce/apex/DocumentAccessController.getDocumentAccessLogs';
+import syncAccessLogsForRecord from '@salesforce/apex/DocumentAccessController.syncAccessLogsForRecord';
 import getViewerUrl from '@salesforce/apex/DocumentAccessLogger.getViewerUrl';
 import getWatermarkedViewerUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getWatermarkedViewerUrlForDirectUpload';
 import getViewerSessionUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getViewerSessionUrlForDirectUpload';
@@ -99,11 +101,24 @@ export default class DocumentAccessTracker extends LightningElement {
                 return {};
             });
 
-            const recentActivity = await getRecentActivity({ limitCount: 20 }).catch(error => {
-                // eslint-disable-next-line no-console
-                console.error('Failed to load recent activity', error);
-                return [];
-            });
+            let rawAccessLogs = [];
+            if (this.recordId) {
+                await syncAccessLogsForRecord({ recordId: this.recordId }).catch(error => {
+                    // eslint-disable-next-line no-console
+                    console.error('Failed to sync access logs for record', error);
+                });
+                rawAccessLogs = await getDocumentAccessLogs({ documentId: this.recordId }).catch(error => {
+                    // eslint-disable-next-line no-console
+                    console.error('Failed to load access logs for record', error);
+                    return [];
+                });
+            } else {
+                rawAccessLogs = await getRecentActivity({ limitCount: 20 }).catch(error => {
+                    // eslint-disable-next-line no-console
+                    console.error('Failed to load recent activity', error);
+                    return [];
+                });
+            }
 
             let uploads = [];
             if (this.recordId) {
@@ -116,7 +131,7 @@ export default class DocumentAccessTracker extends LightningElement {
 
             this.complianceStats = stats || {};
 
-            this.accessLogs = (recentActivity || []).map((log) => ({
+            this.accessLogs = (rawAccessLogs || []).map((log) => ({
                 id: log.id,
                 accessTimestamp: log.accessTimestamp,
                 accessType: log.accessType,

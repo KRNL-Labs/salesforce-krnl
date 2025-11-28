@@ -23,6 +23,9 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       documentId
     } = req.body;
 
+    const salesforceInstanceUrl = req.header('X-Salesforce-Instance-Url') || (req.user && req.user.instanceUrl) || null;
+    const salesforceAccessToken = req.header('X-Salesforce-Token') || null;
+
     logger.debug('Incoming access log request', {
       documentHash,
       recordId,
@@ -78,7 +81,9 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       sessionId,
       clientIP: clientIP || req.ip,
       userAgent: userAgent || req.get('User-Agent'),
-      documentId: finalDocumentId
+      documentId: finalDocumentId,
+      salesforceInstanceUrl,
+      salesforceAccessToken
     });
 
     logger.info('KRNL access workflow started', {
@@ -178,8 +183,12 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       accessType,
       clientIP,
       userAgent,
-      documentId
+      documentId,
+      accessLogId
     } = req.body || {};
+
+    const salesforceInstanceUrl = req.header('X-Salesforce-Instance-Url') || (req.user && req.user.instanceUrl) || null;
+    const salesforceAccessToken = req.header('X-Salesforce-Token') || null;
 
     logger.debug('Incoming access init request', {
       documentHash,
@@ -188,7 +197,8 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       accessType,
       clientIP: clientIP || req.ip,
       userAgent: userAgent || req.get('User-Agent'),
-      documentId
+      documentId,
+      accessLogId
     });
 
     if (!documentHash || !recordId || !userId || !accessType) {
@@ -226,7 +236,10 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       sessionId,
       clientIP: clientIP || req.ip,
       userAgent: userAgent || req.get('User-Agent'),
-      documentId: finalDocumentId
+      documentId: finalDocumentId,
+      accessLogId,
+      salesforceInstanceUrl,
+      salesforceAccessToken
     });
 
     logger.info('KRNL access workflow started (init)', {
@@ -341,6 +354,8 @@ router.get('/session/:sessionId', validateSalesforceToken, async (req, res) => {
       status: sessionStatus.state,
       result: sessionStatus.result,
       txHash: sessionStatus.txHash,
+      documentId: sessionStatus.documentId,
+      accessHash: sessionStatus.accessHash,
       timestamp: sessionStatus.timestamp,
       progress: sessionStatus.progress
     });

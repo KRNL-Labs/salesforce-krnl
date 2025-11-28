@@ -261,6 +261,24 @@ public with sharing class DocumentAccessLogger {
                     throw new DocumentAccessException('Backend did not return a viewerSessionUrl');
                 }
 
+                // After successfully starting the access workflow, create a queued access log row
+                try {
+                    Document_Access_Log__c accessLog = new Document_Access_Log__c(
+                        Document_ID__c = blockchainDoc.Document_ID__c,
+                        Document_Hash__c = blockchainDoc.Document_Hash__c,
+                        Access_Type__c = accessType,
+                        User_ID__c = userId,
+                        Access_Timestamp__c = Datetime.now(),
+                        IP_Address__c = clientIP,
+                        User_Agent__c = userAgent,
+                        Status__c = 'Queued for Blockchain',
+                        Blockchain_Response__c = res.getBody()
+                    );
+                    insert accessLog;
+                } catch (Exception logEx) {
+                    System.debug(LoggingLevel.WARN, 'Failed to create access log for direct upload session: ' + logEx.getMessage());
+                }
+
                 return viewerSessionUrl;
             } else {
                 throw new DocumentAccessException(

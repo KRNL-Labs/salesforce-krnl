@@ -65,7 +65,7 @@ public with sharing class DocumentAccessController {
      * @param documentId ContentDocument ID (passed as String from LWC)
      * @return List<AccessLogWrapper> List of access log entries
      */
-    @AuraEnabled(cacheable=true)
+    @AuraEnabled
     public static List<AccessLogWrapper> getDocumentAccessLogs(String documentId) {
         List<AccessLogWrapper> logWrappers = new List<AccessLogWrapper>();
 
@@ -85,6 +85,28 @@ public with sharing class DocumentAccessController {
                 LIMIT 50
             ];
 
+            // Collect document hashes to resolve file metadata
+            Set<String> documentHashes = new Set<String>();
+            for (Document_Access_Log__c log : logs) {
+                if (String.isNotBlank(log.Document_Hash__c)) {
+                    documentHashes.add(log.Document_Hash__c);
+                }
+            }
+
+            // Query related Blockchain_Document__c records, keyed by hash so we can resolve fileName
+            Map<String, Blockchain_Document__c> documentMap = new Map<String, Blockchain_Document__c>();
+            if (!documentHashes.isEmpty()) {
+                for (Blockchain_Document__c doc : [
+                    SELECT Id, Document_ID__c, Document_Hash__c, Metadata__c, File_Name__c
+                    FROM Blockchain_Document__c
+                    WHERE Document_Hash__c IN :documentHashes
+                ]) {
+                    if (String.isNotBlank(doc.Document_Hash__c)) {
+                        documentMap.put(doc.Document_Hash__c, doc);
+                    }
+                }
+            }
+
             for (Document_Access_Log__c log : logs) {
                 AccessLogWrapper wrapper = new AccessLogWrapper();
                 wrapper.id = log.Id;
@@ -101,6 +123,35 @@ public with sharing class DocumentAccessController {
                 wrapper.userName = log.CreatedBy.Name;
                 wrapper.blockchainStatus = getBlockchainStatusForLog(log);
 
+                // Parse accessHash from Blockchain_Response__c when present
+                if (String.isNotBlank(log.Blockchain_Response__c)) {
+                    try {
+                        Map<String, Object> response = (Map<String, Object>)JSON.deserializeUntyped(log.Blockchain_Response__c);
+                        if (response.containsKey('accessHash')) {
+                            wrapper.accessHash = (String)response.get('accessHash');
+                        }
+                    } catch (Exception e) {
+                        // Ignore parsing errors
+                    }
+                }
+
+                // Resolve fileName from related Blockchain_Document__c
+                Blockchain_Document__c doc = documentMap.get(log.Document_Hash__c);
+                if (doc != null) {
+                    if (String.isNotBlank(doc.File_Name__c)) {
+                        wrapper.fileName = doc.File_Name__c;
+                    } else if (String.isNotBlank(doc.Metadata__c)) {
+                        try {
+                            Map<String, Object> metadata = (Map<String, Object>)JSON.deserializeUntyped(doc.Metadata__c);
+                            if (metadata.containsKey('fileName')) {
+                                wrapper.fileName = (String)metadata.get('fileName');
+                            }
+                        } catch (Exception e) {
+                            // Ignore parsing errors
+                        }
+                    }
+                }
+
                 logWrappers.add(wrapper);
             }
 
@@ -109,6 +160,109 @@ public with sharing class DocumentAccessController {
         }
 
         return logWrappers;
+    }
+
+    @AuraEnabled
+    public static void syncAccessLogsForRecord(Id recordId) {
+        if (recordId == null) {
+            return;
+        }
+
+        List<Document_Access_Log__c> logs = [
+            SELECT Id, Status__c, Blockchain_Response__c
+            FROM Document_Access_Log__c
+            WHERE Document_ID__c = :recordId
+            AND Status__c = 'Queued for Blockchain'
+            LIMIT 20
+        ];
+
+        if (logs.isEmpty()) {
+            return;
+        }
+
+        for (Document_Access_Log__c log : logs) {
+            try {
+                syncSingleAccessLog(log);
+            } catch (Exception e) {
+                // Ignore per-log sync errors to avoid failing the whole transaction
+            }
+        }
+    }
+
+    private static void syncSingleAccessLog(Document_Access_Log__c log) {
+        if (log == null || String.isBlank(log.Blockchain_Response__c)) {
+            return;
+        }
+
+        String sessionId;
+        try {
+            Map<String, Object> existing = (Map<String, Object>)JSON.deserializeUntyped(log.Blockchain_Response__c);
+            if (existing != null && existing.containsKey('sessionId')) {
+                sessionId = (String)existing.get('sessionId');
+            }
+        } catch (Exception e) {
+            return;
+        }
+
+        if (String.isBlank(sessionId)) {
+            return;
+        }
+
+        HttpRequest req = new HttpRequest();
+        Http http = new Http();
+
+        String baseEndpoint = 'callout:krnl_blockchain_endpoint';
+        String encodedSessionId = EncodingUtil.urlEncode(sessionId, 'UTF-8');
+        req.setEndpoint(baseEndpoint + '/api/access/session/' + encodedSessionId);
+        req.setMethod('GET');
+        req.setHeader('Accept', 'application/json');
+        req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+        req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+        req.setTimeout(120000);
+
+        HTTPResponse res = http.send(req);
+        Integer status = res.getStatusCode();
+
+        if (status < 200 || status >= 300) {
+            return;
+        }
+
+        Map<String, Object> body;
+        try {
+            body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+        } catch (Exception e) {
+            return;
+        }
+
+        if (body == null || !body.containsKey('success') || !(Boolean)body.get('success')) {
+            return;
+        }
+
+        String state = (String)body.get('status');
+        if (String.isBlank(state)) {
+            return;
+        }
+
+        if (state != 'COMPLETED' && state != 'COMPLETED_WITH_EVENT') {
+            return;
+        }
+
+        String accessHash;
+        if (body.containsKey('accessHash')) {
+            accessHash = (String)body.get('accessHash');
+        }
+
+        if (String.isBlank(accessHash)) {
+            return;
+        }
+
+        Document_Access_Log__c toUpdate = new Document_Access_Log__c(
+            Id = log.Id,
+            Status__c = 'Logged to Blockchain',
+            Blockchain_Response__c = res.getBody()
+        );
+
+        update toUpdate;
     }
 
     /**

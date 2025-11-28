@@ -20,6 +20,135 @@ class KRNLService {
   }
 
   /**
+   * Update the corresponding Salesforce Document_Access_Log__c row when an
+   * access logging workflow has completed on-chain. This lets the LWC Access
+   * History table show a real accessHash and "Logged to Blockchain" status
+   * even for the session-first flow.
+   */
+  async _updateSalesforceAccessLog(session) {
+    if (!session) {
+      return;
+    }
+
+    if (session.salesforceUpdated) {
+      return;
+    }
+
+    const instanceUrl = process.env.SALESFORCE_INSTANCE_URL || session.salesforceInstanceUrl;
+    const accessToken = process.env.SALESFORCE_ACCESS_TOKEN || session.salesforceAccessToken;
+
+    if (!instanceUrl || !accessToken) {
+      logger.warn('SALESFORCE_INSTANCE_URL or SALESFORCE_ACCESS_TOKEN not configured; skipping access log update', {
+        hasInstanceUrl: !!instanceUrl,
+        hasAccessToken: !!accessToken
+      });
+      session.salesforceUpdated = true;
+      return;
+    }
+
+    let accessLogId = session.accessLogId || null;
+
+    // If we don't already know the access log Id, try to locate the most
+    // recent matching row by documentId/hash/userId/accessType.
+    if (!accessLogId) {
+      try {
+        const conditions = [];
+
+        if (session.recordId) {
+          conditions.push(`Document_ID__c='${session.recordId}'`);
+        }
+        if (session.documentHash) {
+          conditions.push(`Document_Hash__c='${session.documentHash}'`);
+        }
+        if (session.userId) {
+          conditions.push(`User_ID__c='${session.userId}'`);
+        }
+        if (session.accessType) {
+          conditions.push(`Access_Type__c='${session.accessType}'`);
+        }
+
+        if (conditions.length === 0) {
+          logger.warn('Insufficient data to locate Document_Access_Log__c; skipping update', {
+            sessionId: session.sessionId
+          });
+          session.salesforceUpdated = true;
+          return;
+        }
+
+        const soql = `SELECT Id FROM Document_Access_Log__c WHERE ${conditions.join(' AND ')} ORDER BY Access_Timestamp__c DESC LIMIT 1`;
+        const queryUrl = `${instanceUrl}/services/data/v65.0/query?q=${encodeURIComponent(soql)}`;
+
+        const queryResp = await axios.get(queryUrl, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        });
+
+        const records = (queryResp.data && queryResp.data.records) || [];
+        if (!records.length) {
+          logger.warn('No matching Document_Access_Log__c found to update', {
+            sessionId: session.sessionId,
+            soql
+          });
+          session.salesforceUpdated = true;
+          return;
+        }
+
+        accessLogId = records[0].Id;
+        session.accessLogId = accessLogId;
+      } catch (error) {
+        logger.error('Failed to locate Salesforce access log via SOQL', {
+          sessionId: session.sessionId,
+          error: error.message
+        });
+        session.salesforceUpdated = true;
+        return;
+      }
+    }
+
+    const body = {
+      Status__c: 'Logged to Blockchain',
+      Blockchain_Response__c: JSON.stringify({
+        source: 'krnl-session',
+        sessionId: session.sessionId,
+        documentHash: session.documentHash || null,
+        recordId: session.recordId || null,
+        documentId: session.documentId || null,
+        accessHash: session.accessHash || null,
+        txHash: session.txHash || null,
+        updatedAt: session.updatedAt || new Date().toISOString()
+      })
+    };
+
+    const url = `${instanceUrl}/services/data/v65.0/sobjects/Document_Access_Log__c/${encodeURIComponent(accessLogId)}`;
+
+    try {
+      const resp = await axios.patch(url, body, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000
+      });
+
+      logger.info('Updated Salesforce Document_Access_Log__c from KRNL session', {
+        accessLogId,
+        status: resp.status
+      });
+      session.salesforceUpdated = true;
+    } catch (error) {
+      logger.error('Failed to update Salesforce access log from KRNL session', {
+        accessLogId,
+        error: error.message
+      });
+      session.salesforceUpdated = true;
+      throw error;
+    }
+  }
+
+  /**
    * Apply simple string replacements recursively to a workflow template node.
    * Mirrors the applyReplacements helper in backend/scripts/testAccessWorkflow.js.
    */
@@ -152,7 +281,19 @@ class KRNLService {
    * Start access logging workflow via KRNL
    */
   async startAccessWorkflow(params) {
-    const { documentHash, userId, accessType, sessionId, clientIP, userAgent, recordId, documentId } = params;
+    const {
+      documentHash,
+      userId,
+      accessType,
+      sessionId,
+      clientIP,
+      userAgent,
+      recordId,
+      documentId,
+      accessLogId,
+      salesforceInstanceUrl,
+      salesforceAccessToken
+    } = params;
 
     logger.info(`Starting access workflow for document: ${documentHash}, user: ${userId}, record: ${recordId}`);
 
@@ -189,8 +330,8 @@ class KRNLService {
         USER_ID: userId,
         CLIENT_IP: clientIP,
         USER_AGENT: userAgent,
-        SALESFORCE_ACCESS_TOKEN: process.env.SALESFORCE_ACCESS_TOKEN,
-        SALESFORCE_INSTANCE_URL: process.env.SALESFORCE_INSTANCE_URL,
+        SALESFORCE_ACCESS_TOKEN: salesforceAccessToken || process.env.SALESFORCE_ACCESS_TOKEN,
+        SALESFORCE_INSTANCE_URL: salesforceInstanceUrl || process.env.SALESFORCE_INSTANCE_URL,
         CURRENT_TIMESTAMP: new Date().toISOString(),
         TRANSACTION_INTENT_DELEGATE: intent.delegate,
         TRANSACTION_INTENT_ID: intent.id,
@@ -219,8 +360,8 @@ class KRNLService {
         '{{USER_ID}}': userId,
         '{{CLIENT_IP}}': clientIP,
         '{{USER_AGENT}}': userAgent,
-        '{{SALESFORCE_INSTANCE_URL}}': process.env.SALESFORCE_INSTANCE_URL || '',
-        '{{SALESFORCE_ACCESS_TOKEN}}': process.env.SALESFORCE_ACCESS_TOKEN || ''
+        '{{SALESFORCE_INSTANCE_URL}}': salesforceInstanceUrl || process.env.SALESFORCE_INSTANCE_URL || '',
+        '{{SALESFORCE_ACCESS_TOKEN}}': salesforceAccessToken || process.env.SALESFORCE_ACCESS_TOKEN || ''
       };
 
       const dsl = this._applyReplacements(workflowTemplate, replacements);
@@ -263,6 +404,9 @@ class KRNLService {
         accessType,
         clientIP,
         userAgent,
+        accessLogId: accessLogId || null,
+        salesforceInstanceUrl: salesforceInstanceUrl || process.env.SALESFORCE_INSTANCE_URL || null,
+        salesforceAccessToken: salesforceAccessToken || process.env.SALESFORCE_ACCESS_TOKEN || null,
         status: 'RUNNING',
         startedAt: new Date().toISOString(),
         intentId,

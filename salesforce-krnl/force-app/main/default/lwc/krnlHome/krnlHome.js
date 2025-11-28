@@ -27,7 +27,7 @@ export default class KrnlHome extends LightningElement {
         { label: 'Document', fieldName: 'documentName', type: 'text' },
         { label: 'Access Type', fieldName: 'accessType', type: 'text' },
         { label: 'User', fieldName: 'userName', type: 'text' },
-        { label: 'Status', fieldName: 'status', type: 'text' }
+        { label: 'Blockchain Status', fieldName: 'blockchainStatus', type: 'text' }
     ];
 
     connectedCallback() {
@@ -46,10 +46,10 @@ export default class KrnlHome extends LightningElement {
             this.recentAccessLogs = (recent || []).map((log) => ({
                 id: log.id,
                 timestamp: log.accessTimestamp,
-                documentName: log.documentId,
+                documentName: log.fileName || log.documentId,
                 accessType: log.accessType,
                 userName: log.userName,
-                status: log.status
+                blockchainStatus: log.blockchainStatus || log.status
             }));
         } catch (error) {
             // eslint-disable-next-line no-console

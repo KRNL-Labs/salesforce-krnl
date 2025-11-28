@@ -12,15 +12,6 @@
         <target>lightningCommunity__Page</target>
     </targets>
     <targetConfigs>
-        <targetConfig targets="lightning__RecordPage">
-            <objects>
-                <object>ContentDocument</object>
-                <object>Account</object>
-                <object>Contact</object>
-                <object>Case</object>
-                <object>Opportunity</object>
-            </objects>
-        </targetConfig>
         <targetConfig targets="lightning__AppPage,lightning__HomePage">
             <supportedFormFactors>
                 <supportedFormFactor type="Large"/>
