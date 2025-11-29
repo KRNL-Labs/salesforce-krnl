@@ -65,6 +65,30 @@ This diagram represents any of the KRNL workflows (compliance check, access logg
 - Backend controller → `KRNLService` → `intentBuilder` → KRNL Node
 - KRNL Node → Blockchain → back to UI via polling.
 
+### Session-first secure viewer & access history (overview)
+
+For the **secure document viewer** and access history, the repo also implements a
+"session-first" flow:
+
+- When a user clicks **View** on a registered upload, Apex calls the backend
+  `/api/access/init` endpoint.
+- The backend starts a KRNL access-logging workflow and returns a **`sessionId`**
+  plus a `/secure-viewer?sessionId=...` URL.
+- Apex immediately creates a `Document_Access_Log__c` row with
+  `Status__c = 'Queued for Blockchain'` and stores the raw `/api/access/init`
+  JSON (including `sessionId`) in `Blockchain_Response__c`.
+- The viewer tab polls the backend for session status and, once ready, obtains
+  a signed viewer token.
+- Later, when the user revisits the record, Apex calls the backend
+  `/api/access/session/:sessionId` endpoint for any queued logs, and updates the
+  corresponding `Document_Access_Log__c` rows to **Logged to Blockchain** with a
+  real `accessHash`.
+
+A detailed diagram of this flow lives in:
+
+- `salesforce-krnl/salesforce-krnl/README.md` →
+  **"Session-first secure viewer & access history (architecture)"**
+
 ---
 
 ## Repository Layout
