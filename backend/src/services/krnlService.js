@@ -323,7 +323,7 @@ class KRNLService {
           DOCUMENT_REGISTRY_CONTRACT: process.env.DOCUMENT_REGISTRY_CONTRACT,
           ATTESTOR_ADDRESS: process.env.ATTESTOR_ADDRESS
         },
-        DOCUMENT_ID: recordId,
+        DOCUMENT_ID: documentId || recordId,
         RECORD_ID: recordId,
         DOCUMENT_HASH: documentHash,
         ACCESS_TYPE: accessType,
@@ -355,6 +355,7 @@ class KRNLService {
         '{{TRANSACTION_INTENT_DEADLINE}}': intent.deadline,
         '{{USER_SIGNATURE}}': intent.signature,
         '{{DOCUMENT_HASH}}': documentHash,
+        '{{DOCUMENT_ID}}': documentId || recordId,
         '{{RECORD_ID}}': recordId,
         '{{ACCESS_TYPE}}': accessType,
         '{{USER_ID}}': userId,

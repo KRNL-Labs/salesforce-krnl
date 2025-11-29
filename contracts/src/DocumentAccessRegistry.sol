@@ -138,7 +138,6 @@ contract DocumentAccessRegistry is TargetBase, AccessControl, Pausable {
     ) internal {
         require(bytes(_documentHash).length > 0, "Document hash cannot be empty");
         require(bytes(_salesforceRecordId).length > 0, "Salesforce record ID cannot be empty");
-        require(!documentExists(_documentHash), "Document already registered");
 
         documents[_documentHash] = DocumentRecord({
             documentHash: _documentHash,

@@ -364,12 +364,51 @@ window.addEventListener('contextmenu', function (e) { e.preventDefault(); }, tru
 
     const pdf = await loadingTask.promise;
 
+    // If we have a canvas container element, render all pages as individual
+    // canvases inside it so the user can scroll through the full document.
+    if (canvasContainer) {
+      // Clear any existing content (including the original single canvas)
+      while (canvasContainer.firstChild) {
+        canvasContainer.removeChild(canvasContainer.firstChild);
+      }
+
+      const numPages = pdf.numPages || 1;
+      for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1.5 });
+
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = viewport.width;
+        pageCanvas.height = viewport.height;
+        pageCanvas.style.display = 'block';
+        pageCanvas.style.margin = '0 auto 16px auto';
+
+        const pageContext = pageCanvas.getContext('2d');
+        await page.render({ canvasContext: pageContext, viewport }).promise;
+
+        canvasContainer.appendChild(pageCanvas);
+      }
+
+      if (loadingEl) {
+        loadingEl.style.display = 'none';
+      }
+      if (messageEl) {
+        messageEl.textContent = '';
+      }
+      canvasContainer.style.display = 'block';
+      return;
+    }
+
+    // Fallback: if canvasContainer is missing, render only the first page
+    // into the single canvas element as before.
     const page = await pdf.getPage(1);
     const viewport = page.getViewport({ scale: 1.5 });
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
+    if (canvas) {
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    }
 
-    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
     if (loadingEl) {
       loadingEl.style.display = 'none';
     }

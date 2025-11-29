@@ -153,7 +153,9 @@ public with sharing class DocumentAccessLogger {
                 'accessType' => accessType,
                 'clientIP' => clientIP,
                 'userAgent' => userAgent,
-                'documentId' => path
+                'documentId' => path,
+                'userEmail' => UserInfo.getUserEmail(),
+                'orgId' => UserInfo.getOrganizationId()
             };
             req.setBody(JSON.serialize(payload));
 
@@ -246,7 +248,9 @@ public with sharing class DocumentAccessLogger {
                 'accessType' => accessType,
                 'clientIP' => clientIP,
                 'userAgent' => userAgent,
-                'documentId' => path
+                'documentId' => path,
+                'userEmail' => UserInfo.getUserEmail(),
+                'orgId' => UserInfo.getOrganizationId()
             };
             req.setBody(JSON.serialize(payload));
 
@@ -319,7 +323,9 @@ public with sharing class DocumentAccessLogger {
 
         Map<String, Object> payload = new Map<String, Object>{
             'path' => path,
-            'recordId' => recordId != null ? (String)recordId : null
+            'recordId' => recordId != null ? (String)recordId : null,
+            'userEmail' => UserInfo.getUserEmail(),
+            'orgId' => UserInfo.getOrganizationId()
         };
         req.setBody(JSON.serialize(payload));
 
@@ -488,7 +494,9 @@ public with sharing class DocumentAccessLogger {
 
         Map<String, Object> payload = new Map<String, Object>{
             'recordId' => (String)recordId,
-            'userId' => UserInfo.getUserId()
+            'userId' => UserInfo.getUserId(),
+            'userEmail' => UserInfo.getUserEmail(),
+            'orgId' => UserInfo.getOrganizationId()
         };
         req.setBody(JSON.serialize(payload));
 

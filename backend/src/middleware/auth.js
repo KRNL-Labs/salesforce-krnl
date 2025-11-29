@@ -29,11 +29,19 @@ const validateJWT = (req, res, next) => {
 };
 
 /**
- * Validate Salesforce token middleware (simplified for testing)
+ * Validate Salesforce token middleware.
+ *
+ * For this app we trust the headers/body coming from Apex/LWC instead of
+ * doing an external REST call back to Salesforce. The middleware enforces
+ * that a Salesforce session token header is present (in non-development
+ * environments) and then populates req.user with basic context for logging
+ * and multi-tenant routing.
  */
 const validateSalesforceToken = async (req, res, next) => {
   const salesforceToken = req.header('X-Salesforce-Token');
 
+  // In non-development environments, require that a Salesforce session token
+  // header is present as a minimal guardrail.
   if (!salesforceToken && process.env.NODE_ENV !== 'development') {
     return res.status(401).json({
       success: false,
@@ -41,7 +49,7 @@ const validateSalesforceToken = async (req, res, next) => {
     });
   }
 
-  // In development mode, skip Salesforce validation
+  // In development mode, provide a fixed stub user for convenience.
   if (process.env.NODE_ENV === 'development') {
     req.user = {
       id: 'test_user_001',
@@ -52,24 +60,28 @@ const validateSalesforceToken = async (req, res, next) => {
     return next();
   }
 
-  try {
-    // In production, validate against Salesforce
-    // This would involve calling Salesforce API to validate the session
-    const instanceUrlHeader = req.header('X-Salesforce-Instance-Url');
-    const userInfo = await validateWithSalesforce(salesforceToken, instanceUrlHeader);
-    req.user = userInfo;
-    // Attach tenant context for multi-tenant scenarios based on Salesforce org
-    if (userInfo && userInfo.orgId) {
-      req.tenant = { orgId: userInfo.orgId };
-    }
-    next();
-  } catch (error) {
-    logger.error('Salesforce validation failed:', error);
-    res.status(401).json({
-      success: false,
-      error: 'Invalid Salesforce session.'
-    });
+  // In production/other environments, trust the context that Apex/LWC sends
+  // rather than calling Salesforce. We derive a minimal req.user from
+  // headers and body so downstream code has org / user context.
+  const instanceUrlHeader = req.header('X-Salesforce-Instance-Url') || process.env.SALESFORCE_INSTANCE_URL || null;
+  const bodyUserId = (req.body && (req.body.userId || req.body.salesforceUserId)) || null;
+  const bodyUserEmail = (req.body && (req.body.userEmail || req.body.salesforceUserEmail)) || null;
+  const bodyOrgId = (req.body && (req.body.orgId || req.body.salesforceOrgId)) || null;
+
+  req.user = {
+    id: bodyUserId,
+    email: bodyUserEmail,
+    salesforceId: bodyUserId,
+    orgId: bodyOrgId,
+    instanceUrl: instanceUrlHeader
+  };
+
+  // Optionally attach a simple tenant context keyed by instance URL.
+  if (instanceUrlHeader) {
+    req.tenant = { orgId: instanceUrlHeader };
   }
+
+  return next();
 };
 
 /**

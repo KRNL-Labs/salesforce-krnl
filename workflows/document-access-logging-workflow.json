@@ -69,7 +69,7 @@
             "DocumentAccessParams": {
               "accessType": "{{ACCESS_TYPE}}",
               "documentHash": "{{DOCUMENT_HASH}}",
-              "documentId": "{{RECORD_ID}}",
+              "documentId": "{{DOCUMENT_ID}}",
               "ipAddress": "{{CLIENT_IP}}",
               "salesforceUserId": "{{USER_ID}}",
               "userAgent": "{{USER_AGENT}}"
