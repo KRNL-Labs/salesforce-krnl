@@ -161,4 +161,32 @@ A detailed diagram of this flow lives in:
    - Assign the app and any permission sets to your user.
    - Open the **KRNL Home** app/tab to see the LWC dashboards.
 
---- 
+---
+
+## Backend security, sessions, and Supabase
+
+- **Salesforce auth context**
+  - `validateSalesforceToken` trusts the Salesforce headers/body forwarded by Apex instead of calling Salesforce directly.
+  - Apex sends `userId`, `userEmail`, and `orgId` in the JSON body, plus `X-Salesforce-Instance-Url` in headers.
+  - Outbound calls back into Salesforce (for access-log syncing) prefer `SALESFORCE_ACCESS_TOKEN` / `SALESFORCE_INSTANCE_URL` from the backend `.env`.
+
+- **Secure viewer**
+  - `/secure-viewer` is an HTML+JS page served by the backend that wraps `/api/view`.
+  - Uses `pdf.js` to render **all pages** of the PDF into a scrollable container.
+  - Disables right-click and most keyboard shortcuts, shows a loading state, and is always opened via the session-first flow.
+
+- **Viewer token TTL**
+  - `KRNLService.generateAccessToken` issues JWTs with an expiry controlled by `VIEWER_TOKEN_TTL_SECONDS` (default `3600` seconds).
+  - `/api/view` verifies the token and rejects expired tokens with HTTP 401.
+
+- **Session persistence**
+  - `KRNLService` mirrors in-memory sessions to Supabase Postgres via `sessionStore.js`.
+  - Configure:
+    - `SUPABASE_URL`
+    - `SUPABASE_SERVICE_KEY` (or `SUPABASE_ANON_KEY` for development)
+    - `KRNL_SESSION_TABLE` (defaults to `krnl_sessions`)
+  - Sessions include `startedAt`, `updatedAt`, and `expiresAt` aligned to the viewer token expiry so they can survive backend restarts but still be cleaned up.
+
+- **Session cleanup (recommended)**
+  - Create a `krnl_sessions.expires_at` column and keep it in sync with `session.expiresAt`.
+  - Use a Supabase Edge Function + `pg_cron` / `pg_net` to call the cleanup function daily (for example with `0 0 * * *`) and delete rows where `expires_at < now()`.

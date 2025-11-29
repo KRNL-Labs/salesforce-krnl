@@ -3,6 +3,7 @@ const axios = require('axios');
 const { ethers } = require('ethers');
 const { buildTransactionIntent } = require('./intentBuilder');
 const { buildTransactionIntent4337 } = require('./eip4337IntentBuilder');
+const { saveSession, loadSession } = require('./sessionStore');
 
 // Shared sessions map across all KRNLService instances
 const SHARED_SESSIONS = new Map();
@@ -248,7 +249,7 @@ class KRNLService {
       });
 
       // Store session
-      this.sessions.set(sessionId, {
+      const session = {
         sessionId,
         recordId,
         fileId,
@@ -262,7 +263,18 @@ class KRNLService {
           workflowParameters: safeWorkflowParams,
           pollingHistory: []
         }
-      });
+      };
+
+      this.sessions.set(sessionId, session);
+
+      try {
+        await saveSession(session);
+      } catch (e) {
+        logger.error('Failed to persist compliance workflow session', {
+          sessionId,
+          error: e.message
+        });
+      }
 
       return {
         sessionId,
@@ -394,7 +406,7 @@ class KRNLService {
       }
 
       // Store session so callers can poll for completion / on-chain settlement via JSON-RPC
-      this.sessions.set(sessionId, {
+      const session = {
         sessionId,
         documentHash,
         // Supabase/S3 file path used by /api/view
@@ -419,7 +431,18 @@ class KRNLService {
           dsl,
           pollingHistory: []
         }
-      });
+      };
+
+      this.sessions.set(sessionId, session);
+
+      try {
+        await saveSession(session);
+      } catch (e) {
+        logger.error('Failed to persist access workflow session', {
+          sessionId,
+          error: e.message
+        });
+      }
 
       return {
         sessionId,
@@ -783,9 +806,26 @@ class KRNLService {
   async getWorkflowStatus(sessionId) {
     logger.info(`Getting workflow status for session: ${sessionId}`);
 
-    const session = this.sessions.get(sessionId);
+    let session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`Session not found: ${sessionId}`);
+      // Attempt to lazily hydrate from Supabase-backed store when in-memory
+      // sessions have been lost (e.g. after a process restart).
+      try {
+        const persisted = await loadSession(sessionId);
+        if (persisted) {
+          this.sessions.set(sessionId, persisted);
+          session = persisted;
+        }
+      } catch (e) {
+        logger.error('Failed to hydrate KRNL session from Supabase', {
+          sessionId,
+          error: e.message
+        });
+      }
+
+      if (!session) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
     }
 
     if (this.mockMode) {
@@ -831,6 +871,17 @@ class KRNLService {
       session.txHash = txHash;
       session.updatedAt = new Date().toISOString();
 
+      // Best-effort persistence of updated session state so it can survive
+      // process restarts while callers continue polling.
+      try {
+        await saveSession(session);
+      } catch (e) {
+        logger.error('Failed to persist updated KRNL session', {
+          sessionId,
+          error: e.message
+        });
+      }
+
       return {
         sessionId,
         state: session.status,
@@ -856,12 +907,22 @@ class KRNLService {
     logger.info(`Mock compliance workflow started: ${sessionId}`);
 
     // Simulate workflow execution
-    this.sessions.set(sessionId, {
+    const session = {
       sessionId,
       ...params,
       status: 'RUNNING',
       startedAt: new Date().toISOString(),
       workflowId: `mock_workflow_${sessionId}`
+    };
+
+    this.sessions.set(sessionId, session);
+
+    // Persist mock session so tests/dev flows can exercise persistence logic
+    saveSession(session).catch((e) => {
+      logger.error('Failed to persist mock compliance session', {
+        sessionId,
+        error: e.message
+      });
     });
 
     // Simulate completion after delay
@@ -899,12 +960,21 @@ class KRNLService {
     logger.info(`Mock access workflow started: ${sessionId}`);
 
     // Seed session so getWorkflowStatus can find it immediately
-    this.sessions.set(sessionId, {
+    const session = {
       sessionId,
       ...params,
       status: 'RUNNING',
       startedAt: new Date().toISOString(),
       workflowId: `mock_access_${sessionId}`
+    };
+
+    this.sessions.set(sessionId, session);
+
+    saveSession(session).catch((e) => {
+      logger.error('Failed to persist mock access session', {
+        sessionId,
+        error: e.message
+      });
     });
 
     // Simulate completion for access logging
@@ -1054,6 +1124,10 @@ class KRNLService {
     } = params;
     const jwt = require('jsonwebtoken');
 
+    const ttlSeconds = Number.parseInt(process.env.VIEWER_TOKEN_TTL_SECONDS || '3600', 10);
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const exp = issuedAt + ttlSeconds;
+
     const payload = {
       documentHash,
       userId,
@@ -1063,12 +1137,14 @@ class KRNLService {
       documentPath: documentPath || null,
       recordId: recordId || null,
       accessHash: accessHash || null,
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (60 * 60) // 60 minutes expiry
+      iat: issuedAt,
+      exp
     };
 
     const secret = process.env.JWT_SECRET || 'test_secret_for_development';
-    return jwt.sign(payload, secret);
+    const token = jwt.sign(payload, secret);
+
+    return { token, exp, ttlSeconds };
   }
 
   /**

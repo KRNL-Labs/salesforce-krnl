@@ -16,6 +16,8 @@ In `backend/.env` set at minimum:
 - `PORT=3000` (or your chosen port)
 - `JWT_SECRET=<any strong random string>`
 - `KRNL_NODE_URL=https://node.krnl.xyz`
+- `VIEWER_TOKEN_TTL_SECONDS=3600` (viewer link expiry in seconds)
+- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (or `SUPABASE_ANON_KEY` for development), and optional `KRNL_SESSION_TABLE=krnl_sessions` for persisting KRNL sessions
 
 Then start the backend:
 
@@ -199,9 +201,11 @@ sequenceDiagram
 
 #### Notes and limitations
 
-- **In-memory sessions**: The backend tracks sessions in an in-memory `Map`, shared across
-  KRNLService instances in a single Node process. Restarting the backend clears active sessions,
-  so very long-running workflows should be completed before restarts.
+- **Session persistence**: The backend still tracks sessions in an in-memory `Map`, but also mirrors
+  them to Supabase Postgres (default `krnl_sessions` table) via `sessionStore.js`. `getWorkflowStatus`
+  can hydrate sessions from Supabase after a restart. Viewer tokens expire after
+  `VIEWER_TOKEN_TTL_SECONDS`, and a scheduled Supabase Edge Function can delete rows where
+  `expires_at < now()`.
 - **No backend→Salesforce writes**: The backend never calls Salesforce directly. All updates to
   `Document_Access_Log__c` are performed by Apex (`syncAccessLogsForRecord` / `syncSingleAccessLog`).
 - **Multi-org friendly**: Each org only needs the `krnl_blockchain_endpoint` Named Credential and

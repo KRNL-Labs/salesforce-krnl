@@ -2,6 +2,7 @@ const express = require('express');
 const KRNLService = require('../services/krnlService');
 const { validateSalesforceToken } = require('../middleware/auth');
 const { logger } = require('../utils/logger');
+const { saveSession } = require('../services/sessionStore');
 
 const router = express.Router();
 const krnlService = new KRNLService();
@@ -128,7 +129,7 @@ router.post('/', validateSalesforceToken, async (req, res) => {
     // Generate time-limited access token for document viewer. Include
     // document identifiers and accessHash so /api/view can resolve the
     // file even if in-memory KRNL sessions are no longer available.
-    const accessToken = krnlService.generateAccessToken({
+    const { token: accessToken, exp } = krnlService.generateAccessToken({
       documentHash,
       userId,
       sessionId,
@@ -138,6 +139,16 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       recordId,
       accessHash: workflowStatus.accessHash
     });
+
+    // Align session expiry with viewer token expiry so Supabase can clean up
+    // old sessions using the expiresAt field.
+    if (exp && krnlService.sessions && krnlService.sessions.get) {
+      const session = krnlService.sessions.get(sessionId);
+      if (session) {
+        session.expiresAt = new Date(exp * 1000).toISOString();
+        await saveSession(session);
+      }
+    }
 
     // Build full viewer URL with backend base URL, pointing to the secure HTML viewer
     const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
@@ -437,7 +448,7 @@ router.post('/token', async (req, res) => {
       });
     }
 
-    const accessToken = krnlService.generateAccessToken({
+    const { token: accessToken, exp } = krnlService.generateAccessToken({
       documentHash: session.documentHash,
       userId: session.userId,
       sessionId,
@@ -447,6 +458,11 @@ router.post('/token', async (req, res) => {
       recordId: session.recordId,
       accessHash: session.accessHash
     });
+
+    if (exp) {
+      session.expiresAt = new Date(exp * 1000).toISOString();
+      await saveSession(session);
+    }
 
     const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
 
