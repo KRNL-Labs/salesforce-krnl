@@ -1,24 +1,3 @@
-# Salesforce DX Project: Next Steps
-
-Now that you’ve created a Salesforce DX project, what’s next? Here are some documentation resources to get you started.
-
-## How Do You Plan to Deploy Your Changes?
-
-Do you want to deploy a set of changes, or create a self-contained application? Choose a [development model](https://developer.salesforce.com/tools/vscode/en/user-guide/development-models).
-
-## Configure Your Salesforce DX Project
-
-The `sfdx-project.json` file contains useful configuration information for your project. See [Salesforce DX Project Configuration](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_ws_config.htm) in the _Salesforce DX Developer Guide_ for details about this file.
-
-## Read All About It
-
-- [Salesforce Extensions Documentation](https://developer.salesforce.com/tools/vscode/)
-- [Salesforce CLI Setup Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_setup.meta/sfdx_setup/sfdx_setup_intro.htm)
-- [Salesforce DX Developer Guide](https://developer.salesforce.com/docs/atlas.en-us.sfdx_dev.meta/sfdx_dev/sfdx_dev_intro.htm)
-- [Salesforce CLI Command Reference](https://developer.salesforce.com/docs/atlas.en-us.sfdx_cli_reference.meta/sfdx_cli_reference/cli_reference.htm)
-
----
-
 ## KRNL Document Access & Compliance Setup
 
 This project includes a KRNL-backed document access and compliance flow that spans:
@@ -191,10 +170,7 @@ sequenceDiagram
     A->>B: POST /api/access/init { documentHash, recordId, userId, accessType, ... }
     B->>K: Start KRNL access logging workflow
     B-->>A: { sessionId, viewerSessionUrl, ... }
-    A->>S: insert Document_Access_Log__c(
-        Status__c='Queued for Blockchain',
-        Blockchain_Response__c = raw /api/access/init response (includes sessionId)
-    )
+    A->>S: Create Document_Access_Log__c (Queued for Blockchain, stores /api/access/init response incl sessionId)
     A-->>L: viewerSessionUrl
     L->>U: Open new tab /secure-viewer?sessionId=...
 
@@ -215,10 +191,7 @@ sequenceDiagram
     A->>S: Query Document_Access_Log__c rows with Status__c='Queued for Blockchain'
     A->>B: GET /api/access/session/:sessionId (from Blockchain_Response__c)
     B-->>A: { status, documentId, accessHash, txHash }
-    A->>S: update Document_Access_Log__c(
-        Status__c='Logged to Blockchain',
-        Blockchain_Response__c = latest backend response including accessHash
-    )
+    A->>S: Update Document_Access_Log__c (Logged to Blockchain, stores latest response with accessHash)
     L->>A: getDocumentAccessLogs(documentId)
     A-->>L: AccessLogWrapper records with fileName, accessHash, blockchainStatus
     L->>U: Access History shows Logged to Blockchain + accessHash
