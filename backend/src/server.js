@@ -30,8 +30,6 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // unsafe-eval needed for PDF.js worker
-      scriptSrcElem: ["'self'"], // Allow module scripts from same origin
-      scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"], // Allow data URLs and blobs for PDF rendering
       connectSrc: ["'self'"],
@@ -40,7 +38,8 @@ app.use(helmet({
       mediaSrc: ["'self'"],
       frameSrc: ["'none'"],
       workerSrc: ["'self'", "blob:"], // Required for PDF.js web worker
-      childSrc: ["'self'", "blob:"] // Required for PDF.js web worker
+      childSrc: ["'self'", "blob:"], // Required for PDF.js web worker
+      frameAncestors: ["'self'", "https://*.force.com", "https://*.salesforce.com", "https://*.lightning.force.com"] // Allow embedding in Salesforce
     }
   },
   crossOriginEmbedderPolicy: false, // Required for PDF.js worker
