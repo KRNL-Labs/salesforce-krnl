@@ -119,15 +119,63 @@ A detailed diagram of this flow lives in:
    cp .env.example .env
    ```
 
-   Key variables:
+   ### Required variables
 
-   - `KRNL_NODE_URL` / `KRNL_API_KEY` – KRNL node endpoint and credentials.
-   - `SENDER_ADDRESS` – address of the smart account / signer.
-   - `TARGET_CONTRACT_OWNER` – delegate address used in intents (optional).
-   - `DOCUMENT_REGISTRY_CONTRACT` – registry / attestation contract.
-   - `APP_SECRET` or `JWT_SECRET` – used by `intentBuilder` to sign intents.
-   - `SALESFORCE_INSTANCE_URL`, `SALESFORCE_ACCESS_TOKEN` – used inside workflows.
-   - `MOCK_KRNL` – set to `true` to use in‑memory mocks, `false` to hit KRNL.
+   **Server / logging**
+   - `NODE_ENV` – `production` or `development`
+   - `PORT` – server port (default `3000`)
+   - `PUBLIC_BASE_URL` – public URL for ngrok or deployed backend (e.g., `https://your-domain.ngrok-free.app`)
+   - `JWT_SECRET` – secret for signing viewer and upload tokens
+
+   **KRNL / blockchain**
+   - `KRNL_NODE_URL` – KRNL node endpoint (e.g., `https://node.krnl.xyz`)
+   - `MOCK_KRNL` – `true` for in-memory mocks, `false` for real KRNL node
+   - `DOCUMENT_REGISTRY_CONTRACT` – address of the `DocumentAccessRegistry` contract
+   - `SENDER_ADDRESS` – smart account address (set automatically if using EIP-4337 init)
+   - `TARGET_CONTRACT_OWNER` – delegate address for intents (usually same as `SENDER_ADDRESS`)
+   - `ATTESTOR_ADDRESS` – attestor image identifier (e.g., `image://docker.io/your-attestor:tag`)
+   - `RPC_SEPOLIA_URL` – Ethereum Sepolia RPC endpoint
+
+   **EIP-4337 smart account initialization**
+   - `ENABLE_EIP4337_INIT` – `true` to auto-initialize smart account on startup
+   - `FACTORY_ADDRESS` – smart account factory contract address
+   - `APP_SECRET` – secret used for deterministic smart account salt
+   - `EOA_PRIVATE_KEY` – private key for EOA that controls the smart account
+
+   **Supabase (session persistence)**
+   - `SUPABASE_URL` – Supabase project URL
+   - `SUPABASE_SERVICE_KEY` – Supabase service role key (or `SUPABASE_ANON_KEY` for development)
+   - `KRNL_SESSION_TABLE` – table name for session storage (default `krnl_sessions`)
+
+   **Supabase Storage (S3-compatible file storage)**
+   - `SUPABASE_S3_ENDPOINT` – S3 endpoint (e.g., `https://PROJECT.supabase.co/storage/v1/s3`)
+   - `SUPABASE_S3_REGION` – S3 region (e.g., `ap-southeast-2`)
+   - `SUPABASE_S3_ACCESS_KEY_ID` – S3 access key
+   - `SUPABASE_S3_SECRET_ACCESS_KEY` – S3 secret key
+   - `SUPABASE_BUCKET` – bucket name (default `documents`)
+
+   ### Optional variables
+
+   **Tokens / TTLs**
+   - `VIEWER_TOKEN_TTL_SECONDS` – viewer token expiry in seconds (default `3600`)
+   - `UPLOAD_TOKEN_TTL_SECONDS` – upload token expiry in seconds (default `900`)
+   - `VIEWER_URL_TTL_SECONDS` – signed URL expiry in seconds (default `3600`)
+
+   **Logging**
+   - `LOG_LEVEL` – log level (e.g., `debug`, `info`, `warn`, `error`; default `info`)
+   - `LOG_FILE_PATH` – log file path (default `./logs/app.log` in production)
+
+   **Polling / timeouts**
+   - `KRNL_POLL_TIMEOUT_MS` – KRNL workflow polling timeout in milliseconds (default `30000`)
+   - `MAX_FILE_UPLOAD_BYTES` – max upload size in bytes (default `10485760` = 10 MB)
+
+   **Salesforce (optional overrides)**
+   - `SALESFORCE_INSTANCE_URL` – Salesforce instance URL (overrides per-request headers)
+   - `SALESFORCE_ACCESS_TOKEN` – Salesforce access token (overrides per-request headers)
+   - `SALESFORCE_API_VERSION` – Salesforce API version (default `v60.0`)
+
+   **Fallbacks**
+   - `FALLBACK_NODE_ADDRESS` – fallback KRNL node address (optional)
 
 3. **Run the backend**
 
@@ -135,7 +183,7 @@ A detailed diagram of this flow lives in:
    npm run dev
    ```
 
-   The API will start on the configured port (default usually `http://localhost:3000`).
+   The API will start on the configured port (default `http://localhost:3000`).
 
 ---
 

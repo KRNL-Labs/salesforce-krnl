@@ -10,14 +10,57 @@ Use this section as a quick checklist to get a new scratch org + backend wired u
 
 ### 1. Backend `.env` configuration
 
-In `backend/.env` set at minimum:
+In `backend/.env`, configure the following variables:
 
+#### Required variables
+
+**Server / auth**
+- `NODE_ENV=production` (or `development`)
+- `PORT=3000`
 - `PUBLIC_BASE_URL=https://<your-ngrok-or-deployed-url>`
-- `PORT=3000` (or your chosen port)
-- `JWT_SECRET=<any strong random string>`
+- `JWT_SECRET=<strong-random-string>`
+
+**KRNL / blockchain**
 - `KRNL_NODE_URL=https://node.krnl.xyz`
-- `VIEWER_TOKEN_TTL_SECONDS=3600` (viewer link expiry in seconds)
-- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (or `SUPABASE_ANON_KEY` for development), and optional `KRNL_SESSION_TABLE=krnl_sessions` for persisting KRNL sessions
+- `MOCK_KRNL=false` (set `true` for testing with mocks)
+- `DOCUMENT_REGISTRY_CONTRACT=0x<contract-address>`
+- `SENDER_ADDRESS=0x<smart-account-address>`
+- `TARGET_CONTRACT_OWNER=0x<delegate-address>` (usually same as `SENDER_ADDRESS`)
+- `ATTESTOR_ADDRESS=image://docker.io/<your-attestor-image>:tag`
+- `RPC_SEPOLIA_URL=https://ethereum-sepolia-rpc.publicnode.com`
+
+**EIP-4337 smart account**
+- `ENABLE_EIP4337_INIT=true`
+- `FACTORY_ADDRESS=0x<factory-contract-address>`
+- `APP_SECRET=<secret-for-smart-account-salt>`
+- `EOA_PRIVATE_KEY=0x<eoa-private-key>`
+
+**Supabase (session persistence)**
+- `SUPABASE_URL=https://<project>.supabase.co`
+- `SUPABASE_SERVICE_KEY=<service-role-key>`
+- `KRNL_SESSION_TABLE=krnl_sessions`
+
+**Supabase Storage (S3-compatible)**
+- `SUPABASE_S3_ENDPOINT=https://<project>.supabase.co/storage/v1/s3`
+- `SUPABASE_S3_REGION=<region>` (e.g., `ap-southeast-2`)
+- `SUPABASE_S3_ACCESS_KEY_ID=<s3-access-key>`
+- `SUPABASE_S3_SECRET_ACCESS_KEY=<s3-secret-key>`
+- `SUPABASE_BUCKET=documents`
+
+**Viewer / tokens**
+- `VIEWER_TOKEN_TTL_SECONDS=3600` (viewer token expiry in seconds)
+
+#### Optional variables
+
+- `LOG_LEVEL=debug` (or `info`, `warn`, `error`)
+- `LOG_FILE_PATH=./logs/app.log`
+- `KRNL_POLL_TIMEOUT_MS=60000` (KRNL workflow polling timeout)
+- `MAX_FILE_UPLOAD_BYTES=10485760` (max upload size in bytes)
+- `UPLOAD_TOKEN_TTL_SECONDS=900` (upload token expiry)
+- `VIEWER_URL_TTL_SECONDS=3600` (signed URL expiry)
+- `SALESFORCE_INSTANCE_URL=https://<instance>.my.salesforce.com` (optional override)
+- `SALESFORCE_ACCESS_TOKEN=<token>` (optional override)
+- `SALESFORCE_API_VERSION=v60.0`
 
 Then start the backend:
 
