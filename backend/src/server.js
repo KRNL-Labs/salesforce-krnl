@@ -1,6 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -26,7 +25,7 @@ const rawFileBody = express.raw({
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+// CORS is handled by Caddy reverse proxy, not by Express
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
