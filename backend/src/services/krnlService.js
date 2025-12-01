@@ -886,6 +886,17 @@ class KRNLService {
         });
       }
 
+      if (session.accessHash && !session.salesforceUpdated) {
+        try {
+          await this._updateSalesforceAccessLog(session);
+        } catch (e) {
+          logger.error('Failed to update Salesforce access log after KRNL session', {
+            sessionId,
+            error: e.message
+          });
+        }
+      }
+
       return {
         sessionId,
         state: session.status,
