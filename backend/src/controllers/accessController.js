@@ -2,7 +2,7 @@ const express = require('express');
 const KRNLService = require('../services/krnlService');
 const { validateSalesforceToken } = require('../middleware/auth');
 const { logger } = require('../utils/logger');
-const { saveSession } = require('../services/sessionStore');
+const { saveSession, loadSession } = require('../services/sessionStore');
 
 const router = express.Router();
 const krnlService = new KRNLService();
@@ -259,8 +259,11 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       status: workflowStart.status
     });
 
-    const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
-    const viewerSessionUrl = `${baseUrl}/secure-viewer?sessionId=${encodeURIComponent(sessionId)}`;
+    // Viewer will connect via SSE (/api/access/stream/:sessionId) to get real-time progress
+
+    // Use standalone viewer app URL (defaults to localhost for development)
+    const viewerAppUrl = process.env.VIEWER_APP_URL || 'http://localhost:5173';
+    const viewerSessionUrl = `${viewerAppUrl}?sessionId=${encodeURIComponent(sessionId)}`;
 
     res.status(200).json({
       success: true,
@@ -382,8 +385,79 @@ router.get('/session/:sessionId', validateSalesforceToken, async (req, res) => {
 });
 
 /**
+ * GET /api/access/stream/:sessionId
+ * Server-Sent Events endpoint for real-time workflow progress updates.
+ * The viewer connects to this to get live updates instead of polling.
+ */
+router.get('/stream/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+
+  logger.info('SSE connection established', { sessionId });
+
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+
+  // Send initial connection event
+  res.write(`data: ${JSON.stringify({ type: 'connected', sessionId })}\n\n`);
+
+  // Poll workflow status and send updates
+  const pollInterval = setInterval(async () => {
+    try {
+      const sessionStatus = await krnlService.getWorkflowStatus(sessionId);
+
+      // Check if workflow is complete
+      const isComplete = ['COMPLETED_WITH_EVENT', 'FAILED'].includes(sessionStatus.state);
+      
+      const event = {
+        type: isComplete ? 'complete' : 'progress',
+        sessionId,
+        state: sessionStatus.state,
+        progress: sessionStatus.progress,
+        txHash: sessionStatus.txHash,
+        accessHash: sessionStatus.accessHash,
+        timestamp: new Date().toISOString()
+      };
+
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+
+      // If completed or failed, close connection
+      if (isComplete) {
+        logger.info('SSE workflow completed, closing connection', {
+          sessionId,
+          state: sessionStatus.state,
+          hasAccessHash: !!sessionStatus.accessHash
+        });
+        
+        clearInterval(pollInterval);
+        
+        // Give client time to process the event before closing
+        setTimeout(() => {
+          res.end();
+        }, 100);
+      }
+    } catch (err) {
+      logger.error('SSE polling error', { sessionId, error: err.message });
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+      clearInterval(pollInterval);
+      res.end();
+    }
+  }, 2000); // Poll every 2 seconds
+
+  // Clean up on client disconnect
+  req.on('close', () => {
+    logger.info('SSE client disconnected', { sessionId });
+    clearInterval(pollInterval);
+    res.end();
+  });
+});
+
+/**
  * GET /api/access/public-session/:sessionId
  * Public access session status for secure viewer polling (no Salesforce auth).
+ * Kept for backward compatibility, but SSE /stream endpoint is preferred.
  */
 router.get('/public-session/:sessionId', async (req, res) => {
   try {
@@ -393,15 +467,26 @@ router.get('/public-session/:sessionId', async (req, res) => {
 
     const sessionStatus = await krnlService.getWorkflowStatus(sessionId);
 
-    res.json({
+    const response = {
       success: true,
       sessionId,
-      status: sessionStatus.state,
-      result: sessionStatus.result,
+      state: sessionStatus.state,
+      status: sessionStatus.state, // Keep for backwards compatibility
+      accessHash: sessionStatus.accessHash,
       txHash: sessionStatus.txHash,
+      blockNumber: sessionStatus.blockNumber,
+      result: sessionStatus.result,
       timestamp: sessionStatus.timestamp,
       progress: sessionStatus.progress
+    };
+
+    logger.debug('Public session status response', { 
+      sessionId, 
+      state: response.state,
+      hasAccessHash: !!response.accessHash 
     });
+
+    res.json(response);
 
   } catch (error) {
     logger.error('Public session status error:', error);
@@ -428,11 +513,35 @@ router.post('/token', async (req, res) => {
       });
     }
 
-    const session = krnlService.sessions && krnlService.sessions.get
+    logger.info('Viewer token requested', { sessionId });
+
+    // Try in-memory first
+    let session = krnlService.sessions && krnlService.sessions.get
       ? krnlService.sessions.get(sessionId)
       : null;
 
+    // If not in memory, load from Supabase
     if (!session) {
+      logger.info('Session not in memory, loading from Supabase', { sessionId });
+      session = await loadSession(sessionId);
+      
+      if (session) {
+        logger.info('Session loaded from Supabase', { 
+          sessionId,
+          status: session.status,
+          hasAccessHash: !!session.accessHash,
+          hasDocumentId: !!session.documentId
+        });
+        
+        // Put it back in memory for future requests
+        if (krnlService.sessions) {
+          krnlService.sessions.set(sessionId, session);
+        }
+      }
+    }
+
+    if (!session) {
+      logger.error('Session not found in memory or Supabase', { sessionId });
       return res.status(404).json({
         success: false,
         error: 'Session not found'
@@ -441,6 +550,12 @@ router.post('/token', async (req, res) => {
 
     const okStates = ['COMPLETED', 'COMPLETED_WITH_EVENT'];
     if (!okStates.includes(session.status) || !session.accessHash || !session.documentId) {
+      logger.warn('Session not ready for token generation', {
+        sessionId,
+        status: session.status,
+        hasAccessHash: !!session.accessHash,
+        hasDocumentId: !!session.documentId
+      });
       return res.status(202).json({
         success: false,
         ready: false,
@@ -464,12 +579,19 @@ router.post('/token', async (req, res) => {
       await saveSession(session);
     }
 
+    logger.info('Viewer token generated successfully', { 
+      sessionId,
+      expiresAt: session.expiresAt 
+    });
+
     const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
 
     res.json({
       success: true,
-      ready: true,
+      token: accessToken,
+      expiresAt: session.expiresAt || null,
       sessionId,
+      ready: true,
       status: session.status,
       accessToken,
       viewerUrl: `${baseUrl}/secure-viewer?token=${accessToken}`,

@@ -165,9 +165,9 @@ To add it to an object record page:
 - `/api/access` – synchronous access logging that returns a ready-to-use viewer URL.
 - `/api/access/init` – **session-first** access logging; starts a KRNL workflow and returns a `sessionId` + `viewerSessionUrl`.
 - `/api/access/session/:sessionId` – Salesforce-authenticated session status (used by Apex to sync access logs).
-- `/api/access/public-session/:sessionId` – public session status (used by the secure viewer tab for polling).
+- `/api/access/stream/:sessionId` – **SSE endpoint** used by the new React/Vite secure viewer tab for real-time workflow status.
 - `/api/access/token` – returns a signed viewer token once a session has completed on-chain.
-- `/api/view` – secure PDF/asset viewer used by the KRNL HTML viewer.
+- `/api/view` – secure PDF/asset viewer used by the secure viewer (token-gated).
 - `/api/compliance` and `/api/documents/register-direct` – document registration/compliance.
 
 With these pieces configured, a new scratch org + running backend can:
@@ -220,13 +220,13 @@ sequenceDiagram
     L->>U: Open new tab /secure-viewer?sessionId=...
 
     loop While KRNL workflow is running
-        Viewer->>B: GET /api/access/public-session/:sessionId
+        Viewer->>B: GET /api/access/stream/:sessionId (SSE)
         B->>K: Poll workflow & blockchain
         K-->>B: status + (optional) txHash
-        B-->>Viewer: { status, progress }
+        B-->>Viewer: { status, progress } (SSE event)
     end
 
-    B-->>Viewer: Session ready with accessHash
+    B-->>Viewer: Session ready with accessHash (SSE event)
     Viewer->>B: POST /api/access/token { sessionId }
     B-->>Viewer: { accessToken, viewerUrl }
     Viewer->>U: Render protected PDF with watermark and controls disabled
@@ -254,3 +254,9 @@ sequenceDiagram
 - **Multi-org friendly**: Each org only needs the `krnl_blockchain_endpoint` Named Credential and
   CSP Trusted Site. There is no org-specific token stored in the backend `.env` for the
   session-first flow.
+
+### 9. Secure viewer
+
+- The secure viewer is implemented as a React + Vite app in the `viewer/` folder.
+- It connects to `/api/access/stream/:sessionId` via SSE, then calls `/api/access/token` and `/api/view` to fetch and render the watermarked PDF.
+- Uses `pdf.js` to render **all pages** in a KRNL-themed frame, disables right-click and most shortcuts, and is always opened via the session-first flow.

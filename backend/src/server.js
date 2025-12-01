@@ -31,7 +31,50 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
-// CORS is handled by Caddy reverse proxy, not by Express
+
+// CORS middleware - only in development mode
+// In production, Caddy reverse proxy handles CORS
+if (process.env.NODE_ENV === 'development') {
+  logger.info('CORS middleware enabled for development');
+  
+  app.use((req, res, next) => {
+    const origin = req.get('origin');
+    const allowedOrigins = [
+      'http://localhost:5173',  // Viewer app (dev)
+      'http://localhost:3000',  // Same origin
+      process.env.VIEWER_APP_URL,
+      process.env.PUBLIC_BASE_URL
+    ].filter(Boolean);
+
+    // Also allow Salesforce origins
+    if (origin && (
+      allowedOrigins.includes(origin) ||
+      origin.includes('salesforce.com') ||
+      origin.includes('force.com') ||
+      origin.includes('lightning.force.com')
+    )) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    } else if (!origin) {
+      // No origin header (same-origin or server-to-server)
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Salesforce-Token, X-Salesforce-Instance-Url');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400');
+
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+
+    next();
+  });
+} else {
+  logger.info('CORS middleware disabled - expecting reverse proxy to handle CORS');
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -63,97 +106,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static assets for secure viewer: serve pdf.js (once installed) and viewer JS/CSS from this app
-// These paths are compatible with a strict Content-Security-Policy of script-src 'self'.
-// __dirname is /src, so public assets live in ../public at the project root.
-const pdfjsPath = path.join(__dirname, '../node_modules/pdfjs-dist/build');
-const publicPath = path.join(__dirname, '../public');
-logger.debug('Static file paths configured', { pdfjsPath, publicPath });
-
-app.use('/pdfjs', (req, res, next) => {
-  logger.debug('Serving PDF.js file', { path: req.path });
-  next();
-}, express.static(pdfjsPath));
-
-app.use((req, res, next) => {
-  if (req.path.match(/\.(js|css|html)$/)) {
-    logger.debug('Serving static file', { path: req.path });
-  }
-  next();
-}, express.static(publicPath));
-
-// Secure HTML viewer that wraps /api/view. This page only references same-origin scripts
-// (no inline JS, no external CDNs) so it respects script-src 'self'.
-app.get('/secure-viewer', (req, res) => {
-  logger.debug('Serving secure viewer', {
-    sessionId: req.query.sessionId,
-    headers: {
-      origin: req.get('origin'),
-      referer: req.get('referer'),
-      userAgent: req.get('user-agent')
-    }
-  });
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  
-  // Log CSP header for debugging
-  const cspHeader = res.getHeader('Content-Security-Policy');
-  if (cspHeader) {
-    logger.debug('CSP header set', { csp: cspHeader });
-  } else {
-    logger.warn('No CSP header found - helmet may not be configured correctly');
-  }
-  
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Secure Document Viewer</title>
-  <link rel="stylesheet" href="/secure-viewer.css" />
-</head>
-<body>
-  <div id="root">
-    <div id="toolbar">
-      <div id="title">Secure Document Viewer</div>
-      <div>
-        <span id="expiry" style="margin-right: 8px; font-size: 12px; opacity: 0.8;"></span>
-        <button id="themeToggle" type="button">Dark mode</button>
-      </div>
-    </div>
-    <div id="content">
-      <div id="loadingState">
-        <div class="spinner"></div>
-        <div id="loadingLabel" class="loading-label">Loading document...</div>
-      </div>
-      <div id="message"></div>
-      <div id="canvas-container">
-        <canvas id="pdfCanvas"></canvas>
-      </div>
-
-      <div id="passwordOverlay">
-        <div class="password-dialog">
-          <div class="password-title">Password required</div>
-          <div class="password-subtitle">This document is protected. Enter the password to continue.</div>
-          <div class="password-input-row">
-            <input id="passwordInput" type="password" autocomplete="off" placeholder="Enter password" />
-            <button id="passwordToggle" type="button" aria-label="Show password">Show</button>
-          </div>
-          <div id="passwordError" class="password-error"></div>
-          <div class="password-actions">
-            <button id="passwordSubmit" type="button">Unlock</button>
-          </div>
-        </div>
-      </div>
-      <div id="screenshotShield">
-        <div class="shield-noise"></div>
-        <div class="shield-message">Protected document screenshots are not allowed</div>
-      </div>
-    </div>
-  </div>
-
-  <script type="module" src="/secure-viewer.js"></script>
-</body>
-</html>`);
-});
+// NOTE: Secure viewer has been moved to a standalone Vite app (/viewer)
+// The backend now serves only API endpoints, not the viewer UI
 
 // KRNL API routers (Salesforce integrations)
 app.use('/api/compliance', complianceRouter);

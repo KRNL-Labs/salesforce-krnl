@@ -77,8 +77,8 @@ For the **secure document viewer** and access history, the repo also implements 
 - Apex immediately creates a `Document_Access_Log__c` row with
   `Status__c = 'Queued for Blockchain'` and stores the raw `/api/access/init`
   JSON (including `sessionId`) in `Blockchain_Response__c`.
-- The viewer tab polls the backend for session status and, once ready, obtains
-  a signed viewer token.
+- The viewer tab connects to the backend via **Server-Sent Events (SSE)** for
+  real-time workflow status and, once ready, obtains a signed viewer token.
 - Later, when the user revisits the record, Apex calls the backend
   `/api/access/session/:sessionId` endpoint for any queued logs, and updates the
   corresponding `Document_Access_Log__c` rows to **Logged to Blockchain** with a
@@ -211,7 +211,7 @@ A detailed diagram of this flow lives in:
 
 ---
 
-## Backend security, sessions, and Supabase
+## Backend security, sessions, viewer, and Supabase
 
 - **Salesforce auth context**
   - `validateSalesforceToken` trusts the Salesforce headers/body forwarded by Apex instead of calling Salesforce directly.
@@ -219,9 +219,14 @@ A detailed diagram of this flow lives in:
   - Outbound calls back into Salesforce (for access-log syncing) prefer `SALESFORCE_ACCESS_TOKEN` / `SALESFORCE_INSTANCE_URL` from the backend `.env`.
 
 - **Secure viewer**
-  - `/secure-viewer` is an HTML+JS page served by the backend that wraps `/api/view`.
-  - Uses `pdf.js` to render **all pages** of the PDF into a scrollable container.
-  - Disables right-click and most keyboard shortcuts, shows a loading state, and is always opened via the session-first flow.
+  - The secure viewer is now a standalone **Vite + React** app in `viewer/`.
+  - It connects to `GET /api/access/stream/:sessionId` via **SSE** to receive
+    `connected`, `progress`, and `complete` events, then calls `/api/access/token`
+    and `/api/view?token=...` to fetch and render the PDF.
+  - Uses `pdf.js` to render **all pages** into a scrollable canvas with KRNL-themed
+    UI (header/footer, progress bar, light/dark slider).
+  - Disables right-click and most keyboard shortcuts, adds a **screenshot shield**
+    overlay, and is always opened via the session-first flow.
 
 - **Viewer token TTL**
   - `KRNLService.generateAccessToken` issues JWTs with an expiry controlled by `VIEWER_TOKEN_TTL_SECONDS` (default `3600` seconds).
@@ -233,8 +238,10 @@ A detailed diagram of this flow lives in:
     - `SUPABASE_URL`
     - `SUPABASE_SERVICE_KEY` (or `SUPABASE_ANON_KEY` for development)
     - `KRNL_SESSION_TABLE` (defaults to `krnl_sessions`)
-  - Sessions include `startedAt`, `updatedAt`, and `expiresAt` aligned to the viewer token expiry so they can survive backend restarts but still be cleaned up.
+  - Sessions include `startedAt`, `updatedAt`, and `expiresAt` aligned to the viewer
+    token expiry so they can survive backend restarts but still be cleaned up.
 
-- **Session cleanup (recommended)**
-  - Create a `krnl_sessions.expires_at` column and keep it in sync with `session.expiresAt`.
-  - Use a Supabase Edge Function + `pg_cron` / `pg_net` to call the cleanup function daily (for example with `0 0 * * *`) and delete rows where `expires_at < now()`.
+- **Session cleanup (Supabase cron)**
+  - A Supabase `pg_cron` job (e.g. `cleanup-krnl-sessions-daily`) now runs **hourly**
+    (cron `0 * * * *`) and invokes a Supabase Edge Function that deletes expired
+    sessions and tokens.

@@ -852,7 +852,8 @@ class KRNLService {
       // DocumentAccessLogged event. KRNL's JSON-RPC API does not currently
       // return a transaction hash from krnl_workflowStatus, so we derive the
       // txHash (and capture documentId/accessHash) from the event logs instead.
-      if (session.useJsonRpc && session.documentHash && session.status === 'COMPLETED') {
+      // Only check for the event once - if we already have accessHash, skip this step.
+      if (session.useJsonRpc && session.documentHash && session.status === 'COMPLETED' && !session.accessHash) {
         const eventResult = await this._waitForDocumentAccessLogged(txHash, session.documentHash);
         if (eventResult && eventResult.eventConfirmed) {
           session.status = 'COMPLETED_WITH_EVENT';
@@ -866,6 +867,9 @@ class KRNLService {
             session.accessHash = eventResult.accessHash;
           }
         }
+      } else if (session.accessHash) {
+        // Event was already found in a previous poll - preserve COMPLETED_WITH_EVENT status
+        session.status = 'COMPLETED_WITH_EVENT';
       }
 
       session.txHash = txHash;
