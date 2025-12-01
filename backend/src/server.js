@@ -24,7 +24,23 @@ const rawFileBody = express.raw({
 });
 
 // Middleware
-app.use(helmet());
+// Configure helmet with relaxed CSP for secure viewer
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow same-origin and inline scripts for secure viewer
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"], // Allow data URLs and blobs for PDF rendering
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false // Required for PDF.js worker
+}));
 // CORS is handled by Caddy reverse proxy, not by Express
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
