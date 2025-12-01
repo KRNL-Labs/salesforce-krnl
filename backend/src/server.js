@@ -24,22 +24,27 @@ const rawFileBody = express.raw({
 });
 
 // Middleware
-// Configure helmet with relaxed CSP for secure viewer
+// Configure helmet with relaxed CSP for secure viewer and PDF.js
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow same-origin and inline scripts for secure viewer
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // unsafe-eval needed for PDF.js worker
+      scriptSrcElem: ["'self'"], // Allow module scripts from same origin
+      scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"], // Allow data URLs and blobs for PDF rendering
       connectSrc: ["'self'"],
       fontSrc: ["'self'", "data:"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
-      frameSrc: ["'none'"]
+      frameSrc: ["'none'"],
+      workerSrc: ["'self'", "blob:"], // Required for PDF.js web worker
+      childSrc: ["'self'", "blob:"] // Required for PDF.js web worker
     }
   },
-  crossOriginEmbedderPolicy: false // Required for PDF.js worker
+  crossOriginEmbedderPolicy: false, // Required for PDF.js worker
+  crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 // CORS is handled by Caddy reverse proxy, not by Express
 app.use(express.json());
@@ -50,21 +55,69 @@ app.use((req, res, next) => {
   logger.info('Incoming HTTP request', {
     method: req.method,
     path: req.path,
-    ip: req.ip
+    ip: req.ip,
+    origin: req.get('origin'),
+    referer: req.get('referer')
   });
+  
+  // Log response headers for debugging CSP and CORS
+  const originalSend = res.send;
+  res.send = function(data) {
+    logger.debug('Response headers', {
+      path: req.path,
+      headers: {
+        'content-security-policy': res.getHeader('Content-Security-Policy'),
+        'access-control-allow-origin': res.getHeader('Access-Control-Allow-Origin'),
+        'access-control-allow-methods': res.getHeader('Access-Control-Allow-Methods'),
+        'access-control-allow-headers': res.getHeader('Access-Control-Allow-Headers')
+      }
+    });
+    return originalSend.call(this, data);
+  };
+  
   next();
 });
 
 // Static assets for secure viewer: serve pdf.js (once installed) and viewer JS/CSS from this app
 // These paths are compatible with a strict Content-Security-Policy of script-src 'self'.
 // __dirname is /src, so public assets live in ../public at the project root.
-app.use('/pdfjs', express.static(path.join(__dirname, '../node_modules/pdfjs-dist/build')));
-app.use(express.static(path.join(__dirname, '../public')));
+const pdfjsPath = path.join(__dirname, '../node_modules/pdfjs-dist/build');
+const publicPath = path.join(__dirname, '../public');
+logger.debug('Static file paths configured', { pdfjsPath, publicPath });
+
+app.use('/pdfjs', (req, res, next) => {
+  logger.debug('Serving PDF.js file', { path: req.path });
+  next();
+}, express.static(pdfjsPath));
+
+app.use((req, res, next) => {
+  if (req.path.match(/\.(js|css|html)$/)) {
+    logger.debug('Serving static file', { path: req.path });
+  }
+  next();
+}, express.static(publicPath));
 
 // Secure HTML viewer that wraps /api/view. This page only references same-origin scripts
 // (no inline JS, no external CDNs) so it respects script-src 'self'.
 app.get('/secure-viewer', (req, res) => {
+  logger.debug('Serving secure viewer', {
+    sessionId: req.query.sessionId,
+    headers: {
+      origin: req.get('origin'),
+      referer: req.get('referer'),
+      userAgent: req.get('user-agent')
+    }
+  });
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  
+  // Log CSP header for debugging
+  const cspHeader = res.getHeader('Content-Security-Policy');
+  if (cspHeader) {
+    logger.debug('CSP header set', { csp: cspHeader });
+  } else {
+    logger.warn('No CSP header found - helmet may not be configured correctly');
+  }
+  
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
