@@ -24,25 +24,11 @@ const rawFileBody = express.raw({
 });
 
 // Middleware
-// Configure helmet with relaxed CSP for secure viewer and PDF.js
+// Disable CSP entirely - let Caddy handle it, or rely on browser defaults
+// CSP is causing conflicts with Salesforce sandboxed iframes
 app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"], // unsafe-eval needed for PDF.js worker
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "blob:"], // Allow data URLs and blobs for PDF rendering
-      connectSrc: ["'self'"],
-      fontSrc: ["'self'", "data:"],
-      objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
-      frameSrc: ["'none'"],
-      workerSrc: ["'self'", "blob:"], // Required for PDF.js web worker
-      childSrc: ["'self'", "blob:"], // Required for PDF.js web worker
-      frameAncestors: ["'self'", "https://*.force.com", "https://*.salesforce.com", "https://*.lightning.force.com"] // Allow embedding in Salesforce
-    }
-  },
-  crossOriginEmbedderPolicy: false, // Required for PDF.js worker
+  contentSecurityPolicy: false, // Disable CSP from Express
+  crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 // CORS is handled by Caddy reverse proxy, not by Express
