@@ -1,6 +1,8 @@
 import { LightningElement, track } from 'lwc';
+import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import getComplianceStats from '@salesforce/apex/DocumentAccessController.getComplianceStats';
 import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
+import getSessionDetails from '@salesforce/apex/DocumentAccessController.getSessionDetails';
 
 export default class KrnlHome extends LightningElement {
     @track stats = {
@@ -10,6 +12,15 @@ export default class KrnlHome extends LightningElement {
     };
 
     @track recentAccessLogs = [];
+    @track pagedRecentAccessLogs = [];
+    @track recentSearchTerm = '';
+
+    recentPage = 1;
+    recentPageSize = 10;
+    _recentFilteredCount = 0;
+    @track showSessionModal = false;
+    @track selectedSessionDetails = null;
+    @track isLoadingSessionDetails = false;
 
     accessLogColumns = [
         {
@@ -22,12 +33,24 @@ export default class KrnlHome extends LightningElement {
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit'
-            }
+            },
+            cellAttributes: { alignment: 'center' }
         },
-        { label: 'Document', fieldName: 'documentName', type: 'text' },
-        { label: 'Access Type', fieldName: 'accessType', type: 'text' },
-        { label: 'User', fieldName: 'userName', type: 'text' },
-        { label: 'Blockchain Status', fieldName: 'blockchainStatus', type: 'text' }
+        { label: 'Document', fieldName: 'documentName', type: 'text', cellAttributes: { alignment: 'center' } },
+        { label: 'Access Type', fieldName: 'accessType', type: 'text', cellAttributes: { alignment: 'center' } },
+        { label: 'User', fieldName: 'userName', type: 'text', cellAttributes: { alignment: 'center' } },
+        {
+            label: 'Session',
+            fieldName: 'sessionId',
+            type: 'button',
+            typeAttributes: {
+                label: { fieldName: 'sessionLabel' },
+                name: 'viewSession',
+                variant: 'base',
+                disabled: { fieldName: 'sessionButtonDisabled' }
+            },
+            cellAttributes: { alignment: 'center' }
+        }
     ];
 
     connectedCallback() {
@@ -49,8 +72,12 @@ export default class KrnlHome extends LightningElement {
                 documentName: log.fileName || log.documentId,
                 accessType: log.accessType,
                 userName: log.userName,
-                blockchainStatus: log.blockchainStatus || log.status
+                sessionId: log.sessionId || null,
+                sessionLabel: log.sessionId || 'N/A',
+                sessionButtonDisabled: !log.sessionId
             }));
+
+            this.refreshPagedRecentAccess();
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error('Failed to initialize KRNL Home data', error);
@@ -79,5 +106,165 @@ export default class KrnlHome extends LightningElement {
 
     get hasRecentAccess() {
         return this.recentAccessLogs && this.recentAccessLogs.length > 0;
+    }
+
+    // Pagination + search helpers for recent access logs
+    refreshPagedRecentAccess() {
+        const all = this.recentAccessLogs || [];
+        const term = (this.recentSearchTerm || '').toLowerCase().trim();
+
+        let filtered = all;
+        if (term) {
+            filtered = all.filter((row) => {
+                const doc = (row.documentName || '').toLowerCase();
+                const user = (row.userName || '').toLowerCase();
+                const type = (row.accessType || '').toLowerCase();
+                const session = (row.sessionId || '').toLowerCase();
+                return (
+                    doc.includes(term) ||
+                    user.includes(term) ||
+                    type.includes(term) ||
+                    session.includes(term)
+                );
+            });
+        }
+
+        this._recentFilteredCount = filtered.length;
+
+        const totalPages = this.recentTotalPages;
+        if (this.recentPage > totalPages) {
+            this.recentPage = totalPages || 1;
+        }
+
+        const start = (this.recentPage - 1) * this.recentPageSize;
+        const end = start + this.recentPageSize;
+        this.pagedRecentAccessLogs = filtered.slice(start, end);
+    }
+
+    get recentTotalPages() {
+        if (!this._recentFilteredCount) {
+            return 1;
+        }
+        return Math.ceil(this._recentFilteredCount / this.recentPageSize);
+    }
+
+    get isRecentPrevDisabled() {
+        return this.recentPage <= 1;
+    }
+
+    get isRecentNextDisabled() {
+        return this.recentPage >= this.recentTotalPages;
+    }
+
+    handleRecentSearchChange(event) {
+        this.recentSearchTerm = event.target.value;
+        this.recentPage = 1;
+        this.refreshPagedRecentAccess();
+    }
+
+    handleRecentPrevPage() {
+        if (this.recentPage > 1) {
+            this.recentPage -= 1;
+            this.refreshPagedRecentAccess();
+        }
+    }
+
+    handleRecentNextPage() {
+        if (this.recentPage < this.recentTotalPages) {
+            this.recentPage += 1;
+            this.refreshPagedRecentAccess();
+        }
+    }
+
+    async handleAccessLogRowAction(event) {
+        const action = event.detail.action;
+        const row = event.detail.row;
+
+        if (!action || action.name !== 'viewSession' || !row) {
+            return;
+        }
+
+        const sessionId = row.sessionId;
+        if (!sessionId) {
+            return;
+        }
+
+        this.showSessionModal = true;
+        this.isLoadingSessionDetails = true;
+        this.selectedSessionDetails = null;
+
+        try {
+            const result = await getSessionDetails({ sessionId });
+            if (!result || !result.success) {
+                throw new Error('Failed to fetch session details');
+            }
+
+            // Transform status to user-friendly label
+            let statusLabel = result.status;
+            if (result.status === 'COMPLETED_WITH_EVENT') {
+                statusLabel = 'Logged on Blockchain';
+            }
+
+            // Create Etherscan Sepolia URL for transaction hash
+            const txHashUrl = result.txHash 
+                ? `https://sepolia.etherscan.io/tx/${result.txHash}` 
+                : null;
+
+            // Format timestamp to human-readable format
+            let formattedTimestamp = result.timestamp;
+            if (result.timestamp) {
+                try {
+                    const date = new Date(result.timestamp);
+                    formattedTimestamp = date.toLocaleString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                    });
+                } catch (e) {
+                    // Keep original if parsing fails
+                    formattedTimestamp = result.timestamp;
+                }
+            }
+
+            this.selectedSessionDetails = {
+                sessionId: result.sessionId,
+                userId: result.userId || 'Unknown',
+                userIdUrl: result.userId ? `/${result.userId}` : null,
+                status: statusLabel,
+                accessHash: result.accessHash || null,
+                txHash: result.txHash || null,
+                txHashUrl: txHashUrl,
+                fileName: result.fileName || 'Unknown',
+                timestamp: formattedTimestamp
+            };
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('Failed to load session details', error);
+            const message = error && error.body && error.body.message
+                ? error.body.message
+                : (error && error.message ? error.message : 'Failed to load session details');
+            this.showToast('Error', message, 'error');
+            this.showSessionModal = false;
+        } finally {
+            this.isLoadingSessionDetails = false;
+        }
+    }
+
+    handleCloseSessionModal() {
+        this.showSessionModal = false;
+        this.selectedSessionDetails = null;
+    }
+
+    showToast(title, message, variant) {
+        const evt = new ShowToastEvent({
+            title,
+            message,
+            variant
+        });
+        this.dispatchEvent(evt);
     }
 }

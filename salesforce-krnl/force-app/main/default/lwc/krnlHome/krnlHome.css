@@ -1,24 +1,28 @@
-.card-header-icon {
-    --slds-c-icon-color-foreground-default: #0176d3;
-}
-
-/* Normalize header icon sizing across section cards */
-.slds-card__header .slds-icon {
-    width: 1.25rem;
-    height: 1.25rem;
-}
-
-.header-subtitle {
-    font-size: 0.8125rem;
-    color: #444;
-    margin-top: 4px;
-}
-
-.section-scroll {
-    max-height: 400px;
-    overflow-y: auto;
-    border: 1px solid #e5e5e5;
+.stats-card {
+    background-color: #f8f9fa;
     border-radius: 0.5rem;
+    padding: 1.25rem;
+    border: 1px solid #e5e5e5;
+    transition: all 0.2s ease-in-out;
+}
+
+.stats-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    background-color: #fff;
+    border-color: #d8d8d8;
+}
+
+.stats-value {
+    font-weight: 700;
+    color: #1a1b1e;
+}
+
+.coverage-section {
+    background: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e5e5;
 }
 
 .empty-state {
@@ -28,6 +32,7 @@
     border: 1px dashed #e5e5e5;
 }
 
+/* Modal Styles */
 .modal-header {
     background-color: #f8f9fa;
     border-bottom: 1px solid #e5e5e5;
@@ -79,15 +84,6 @@
 .status-badge.success {
     background-color: #c1f0c8;
     color: #0b4d11;
-}
-
-.status-badge.pending {
-    background-color: #fff0b5;
-    color: #755204;
-}
-
-.refresh-btn {
-    margin-left: 0.5rem;
 }
 
 /* Center-align table headers and content */

@@ -436,7 +436,7 @@ public with sharing class DocumentAccessController {
         try {
             List<Document_Access_Log__c> logs = [
                 SELECT Id, Name, Document_ID__c, Document_Hash__c, Access_Type__c,
-                       User_ID__c, Access_Timestamp__c, Status__c,
+                       User_ID__c, Access_Timestamp__c, Status__c, Session_Id__c,
                        Blockchain_Response__c, Error_Message__c,
                        CreatedBy.Name
                 FROM Document_Access_Log__c
@@ -473,6 +473,7 @@ public with sharing class DocumentAccessController {
                 wrapper.userId = log.User_ID__c;
                 wrapper.accessTimestamp = log.Access_Timestamp__c;
                 wrapper.status = log.Status__c;
+                wrapper.sessionId = log.Session_Id__c;
                 wrapper.userName = log.CreatedBy.Name;
                 wrapper.blockchainStatus = getBlockchainStatusForLog(log);
 

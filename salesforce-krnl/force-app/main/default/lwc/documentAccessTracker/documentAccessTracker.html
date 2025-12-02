@@ -1,5 +1,5 @@
 <template>
-    <lightning-card title="KRNL Document Access & Compliance" icon-name="standard:document">
+    <lightning-card title="AccessShield by KRNL" icon-name="standard:shield">
         <div slot="actions">
             <lightning-button-icon
                 icon-name="utility:refresh"
@@ -7,42 +7,80 @@
                 alternative-text="Refresh"
                 title="Refresh Dashboard"
                 onclick={initializeData}
-                disabled={isProcessing}>
+                disabled={isProcessing}
+                class="refresh-btn">
             </lightning-button-icon>
         </div>
         <div class="slds-card__body slds-card__body_inner slds-p-around_medium">
+            <p class="slds-text-body_regular slds-text-color_weak slds-m-bottom_large" style="padding-left: 2rem;">
+                Securely track document access and verify blockchain registration status in real-time.
+            </p>
 
             <!-- Document Selection Section - Hidden: Auto-registration enabled -->
-            <!-- Documents are automatically registered on blockchain after upload -->
-
             
-
             <!-- Direct Upload Section -->
-            <lightning-card title="Upload Document" icon-name="utility:upload" class="slds-m-bottom_medium">
-                <div class="slds-p-around_medium">
-                    <c-direct-upload-to-backend record-id={recordId} onuploadsuccess={handleUploadSuccess}></c-direct-upload-to-backend>
+            <lightning-card title="Upload Document" icon-name="standard:document" class="slds-m-bottom_large slds-m-horizontal_large">
+                <div class="slds-p-horizontal_medium slds-p-bottom_medium">
+                    <div class="slds-box slds-theme_default slds-p-around_medium">
+                        <c-direct-upload-to-backend record-id={recordId} onuploadsuccess={handleUploadSuccess}></c-direct-upload-to-backend>
+                    </div>
                 </div>
             </lightning-card>
 
             <!-- Uploaded Files for this Record -->
             <template if:true={recordId}>
-                <lightning-card title="Uploaded Files for this Record" icon-name="standard:file" class="slds-m-bottom_medium">
-                    <div class="slds-p-around_medium section-scroll">
+                <lightning-card title="Uploaded Files" icon-name="standard:file" class="slds-m-bottom_large">
+                    <div class="slds-p-horizontal_medium slds-p-bottom_medium">
                         <template if:true={hasUploadsForRecord}>
-                            <lightning-datatable
-                                key-field="id"
-                                data={uploads}
-                                columns={uploadColumns}
-                                hide-checkbox-column="true"
-                                onrowaction={handleUploadRowAction}
-                                class="slds-max-medium-table_stacked">
-                            </lightning-datatable>
+                            <div class="slds-grid slds-grid_vertical-align-center slds-m-bottom_small">
+                                <div class="slds-col slds-size_1-of-2">
+                                    <lightning-input
+                                        type="search"
+                                        value={uploadsSearchTerm}
+                                        onchange={handleUploadsSearchChange}
+                                        variant="label-hidden"
+                                        placeholder="Search uploads">
+                                    </lightning-input>
+                                </div>
+                                <div class="slds-col slds-size_1-of-2 slds-text-align_right">
+                                    <lightning-button-icon
+                                        icon-name="utility:chevronleft"
+                                        alternative-text="Previous page"
+                                        title="Previous page"
+                                        variant="border-filled"
+                                        class="slds-m-right_x-small"
+                                        onclick={handleUploadsPrevPage}
+                                        disabled={isUploadsPrevDisabled}>
+                                    </lightning-button-icon>
+                                    <span class="slds-text-body_small slds-m-horizontal_x-small">Page {uploadsPage} of {uploadsTotalPages}</span>
+                                    <lightning-button-icon
+                                        icon-name="utility:chevronright"
+                                        alternative-text="Next page"
+                                        title="Next page"
+                                        variant="border-filled"
+                                        onclick={handleUploadsNextPage}
+                                        disabled={isUploadsNextDisabled}>
+                                    </lightning-button-icon>
+                                </div>
+                            </div>
+                            <div class="section-scroll slds-box slds-p-around_none slds-theme_default" style="overflow: hidden;">
+                                <lightning-datatable
+                                    key-field="id"
+                                    data={pagedUploads}
+                                    columns={uploadColumns}
+                                    hide-checkbox-column="true"
+                                    onrowaction={handleUploadRowAction}
+                                    class="slds-max-medium-table_stacked">
+                                </lightning-datatable>
+                            </div>
                         </template>
                         <template if:false={hasUploadsForRecord}>
-                            <div class="slds-text-align_center slds-p-around_large empty-state">
-                                <lightning-icon icon-name="utility:file" size="large" alternative-text="No uploads" class="slds-icon-text-light"></lightning-icon>
-                                <p class="slds-text-heading_small slds-m-top_small slds-text-color_default">No uploads for this record yet</p>
-                                <p class="slds-text-color_weak slds-m-top_x-small">Use the Upload Document section above to add files.</p>
+                            <div class="section-scroll">
+                                <div class="empty-state slds-text-align_center">
+                                    <lightning-icon icon-name="utility:file" size="large" alternative-text="No uploads" class="slds-icon-text-light slds-m-bottom_small"></lightning-icon>
+                                    <p class="slds-text-heading_small slds-text-color_weak">No uploads found</p>
+                                    <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">Upload a file above to get started.</p>
+                                </div>
                             </div>
                         </template>
                     </div>
@@ -50,24 +88,59 @@
             </template>
 
             <!-- Access History Section -->
-            <lightning-card title="Access History" icon-name="standard:log_a_call" class="slds-m-bottom_medium">
-                <div class="slds-p-around_medium section-scroll">
+            <lightning-card title="Access History" icon-name="standard:event">
+                <div class="slds-p-horizontal_medium slds-p-bottom_medium">
                     <template if:true={hasAccessLogs}>
-                        <lightning-datatable
-                            key-field="id"
-                            data={accessLogs}
-                            columns={accessLogColumns}
-                            hide-checkbox-column="true"
-                            show-row-number-column="false"
-                            onrowaction={handleAccessLogRowAction}
-                            class="slds-max-medium-table_stacked">
-                        </lightning-datatable>
+                        <div class="slds-grid slds-grid_vertical-align-center slds-m-bottom_small">
+                            <div class="slds-col slds-size_1-of-2">
+                                <lightning-input
+                                    type="search"
+                                    value={accessLogsSearchTerm}
+                                    onchange={handleAccessLogsSearchChange}
+                                    variant="label-hidden"
+                                    placeholder="Search access history">
+                                </lightning-input>
+                            </div>
+                            <div class="slds-col slds-size_1-of-2 slds-text-align_right">
+                                <lightning-button-icon
+                                    icon-name="utility:chevronleft"
+                                    alternative-text="Previous page"
+                                    title="Previous page"
+                                    variant="border-filled"
+                                    class="slds-m-right_x-small"
+                                    onclick={handleAccessLogsPrevPage}
+                                    disabled={isAccessLogsPrevDisabled}>
+                                </lightning-button-icon>
+                                <span class="slds-text-body_small slds-m-horizontal_x-small">Page {accessLogsPage} of {accessLogsTotalPages}</span>
+                                <lightning-button-icon
+                                    icon-name="utility:chevronright"
+                                    alternative-text="Next page"
+                                    title="Next page"
+                                    variant="border-filled"
+                                    onclick={handleAccessLogsNextPage}
+                                    disabled={isAccessLogsNextDisabled}>
+                                </lightning-button-icon>
+                            </div>
+                        </div>
+                        <div class="section-scroll slds-box slds-p-around_none slds-theme_default" style="overflow: hidden;">
+                            <lightning-datatable
+                                key-field="id"
+                                data={pagedAccessLogs}
+                                columns={accessLogColumns}
+                                hide-checkbox-column="true"
+                                show-row-number-column="false"
+                                onrowaction={handleAccessLogRowAction}
+                                class="slds-max-medium-table_stacked">
+                            </lightning-datatable>
+                        </div>
                     </template>
                     <template if:false={hasAccessLogs}>
-                        <div class="slds-text-align_center slds-p-around_large empty-state">
-                            <lightning-icon icon-name="utility:clock" size="large" alternative-text="No data" class="slds-icon-text-light"></lightning-icon>
-                            <p class="slds-text-heading_small slds-m-top_small slds-text-color_default">No access history available</p>
-                            <p class="slds-text-color_weak slds-m-top_x-small">Access logs will appear here when documents are viewed or downloaded</p>
+                        <div class="section-scroll">
+                            <div class="empty-state slds-text-align_center">
+                                <lightning-icon icon-name="utility:event" size="large" alternative-text="No data" class="slds-icon-text-light slds-m-bottom_small"></lightning-icon>
+                                <p class="slds-text-heading_small slds-text-color_weak">No access history</p>
+                                <p class="slds-text-body_small slds-text-color_weak slds-m-top_x-small">Activity logs will appear here once documents are accessed.</p>
+                            </div>
                         </div>
                     </template>
                 </div>
@@ -76,68 +149,94 @@
 
         <!-- Loading Spinner -->
         <template if:true={isProcessing}>
-            <lightning-spinner alternative-text="Processing..." size="medium"></lightning-spinner>
+            <lightning-spinner alternative-text="Processing..." size="medium" variant="brand"></lightning-spinner>
         </template>
 
         <!-- Session Details Modal -->
         <template if:true={showSessionModal}>
             <section role="dialog" tabindex="-1" aria-modal="true" class="slds-modal slds-fade-in-open">
                 <div class="slds-modal__container">
-                    <header class="slds-modal__header">
-                        <h2 class="slds-text-heading_medium">Session Details</h2>
+                    <header class="slds-modal__header modal-header">
+                        <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={handleCloseSessionModal}>
+                            <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse" size="small"></lightning-icon>
+                            <span class="slds-assistive-text">Close</span>
+                        </button>
+                        <h2 class="slds-text-heading_medium slds-hyphenate">Session Details</h2>
                     </header>
-                    <div class="slds-modal__content slds-p-around_medium">
+                    <div class="slds-modal__content slds-p-around_none" style="background: white;">
                         <template if:true={isLoadingSessionDetails}>
-                            <lightning-spinner alternative-text="Loading session details" size="small"></lightning-spinner>
+                            <div class="slds-p-around_large slds-is-relative" style="min-height: 200px;">
+                                <lightning-spinner alternative-text="Loading details..." size="medium" variant="brand"></lightning-spinner>
+                            </div>
                         </template>
                         <template if:false={isLoadingSessionDetails}>
                             <template if:true={selectedSessionDetails}>
-                                <dl class="slds-list_horizontal slds-wrap">
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Session ID">Session ID</dt>
-                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.sessionId}>{selectedSessionDetails.sessionId}</dd>
+                                <div class="modal-content-wrapper">
+                                    <div class="detail-group">
+                                        <div class="detail-label">File Name</div>
+                                        <div class="detail-value slds-text-heading_small">{selectedSessionDetails.fileName}</div>
+                                    </div>
 
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="User">User</dt>
-                                    <dd class="slds-item_detail slds-truncate">
-                                        <template if:true={selectedSessionDetails.userIdUrl}>
-                                            <a href={selectedSessionDetails.userIdUrl} target="_blank">{selectedSessionDetails.userId}</a>
-                                        </template>
-                                        <template if:false={selectedSessionDetails.userIdUrl}>
-                                            {selectedSessionDetails.userId}
-                                        </template>
-                                    </dd>
+                                    <div class="slds-grid slds-gutters slds-wrap">
+                                        <div class="slds-col slds-size_1-of-2">
+                                            <div class="detail-group">
+                                                <div class="detail-label">User</div>
+                                                <div class="detail-value">
+                                                    <template if:true={selectedSessionDetails.userIdUrl}>
+                                                        <a href={selectedSessionDetails.userIdUrl} target="_blank" class="slds-text-link_reset slds-text-link">{selectedSessionDetails.userId}</a>
+                                                    </template>
+                                                    <template if:false={selectedSessionDetails.userIdUrl}>
+                                                        {selectedSessionDetails.userId}
+                                                    </template>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="slds-col slds-size_1-of-2">
+                                            <div class="detail-group">
+                                                <div class="detail-label">Timestamp</div>
+                                                <div class="detail-value">{selectedSessionDetails.timestamp}</div>
+                                            </div>
+                                        </div>
+                                    </div>
 
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Status">Status</dt>
-                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.status}>{selectedSessionDetails.status}</dd>
+                                    <div class="detail-group slds-m-top_medium">
+                                        <div class="detail-label">Status</div>
+                                        <div class="detail-value">
+                                            <span class="status-badge success">{selectedSessionDetails.status}</span>
+                                        </div>
+                                    </div>
 
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Access Hash">Access Hash</dt>
-                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.accessHash}>{selectedSessionDetails.accessHash}</dd>
+                                    <div class="detail-group">
+                                        <div class="detail-label">Session ID</div>
+                                        <div class="detail-value slds-text-font_monospace" style="font-size: 0.85em;">{selectedSessionDetails.sessionId}</div>
+                                    </div>
 
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Transaction Hash">Transaction Hash</dt>
-                                    <dd class="slds-item_detail slds-truncate">
-                                        <template if:true={selectedSessionDetails.txHashUrl}>
-                                            <a href={selectedSessionDetails.txHashUrl} target="_blank" rel="noopener noreferrer">{selectedSessionDetails.txHash}</a>
-                                        </template>
-                                        <template if:false={selectedSessionDetails.txHashUrl}>
-                                            {selectedSessionDetails.txHash}
-                                        </template>
-                                    </dd>
+                                    <div class="detail-group">
+                                        <div class="detail-label">Transaction Hash</div>
+                                        <div class="detail-value slds-text-font_monospace" style="font-size: 0.85em;">
+                                            <template if:true={selectedSessionDetails.txHashUrl}>
+                                                <a href={selectedSessionDetails.txHashUrl} target="_blank" rel="noopener noreferrer">{selectedSessionDetails.txHash}</a>
+                                            </template>
+                                            <template if:false={selectedSessionDetails.txHashUrl}>
+                                                {selectedSessionDetails.txHash}
+                                            </template>
+                                        </div>
+                                    </div>
 
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="File Name">File Name</dt>
-                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.fileName}>{selectedSessionDetails.fileName}</dd>
-
-                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Timestamp">Timestamp</dt>
-                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.timestamp}>{selectedSessionDetails.timestamp}</dd>
-                                </dl>
+                                    <div class="detail-group">
+                                        <div class="detail-label">Access Hash</div>
+                                        <div class="detail-value slds-text-font_monospace" style="font-size: 0.85em;">{selectedSessionDetails.accessHash}</div>
+                                    </div>
+                                </div>
                             </template>
                         </template>
                     </div>
                     <footer class="slds-modal__footer">
-                        <lightning-button label="Close" onclick={handleCloseSessionModal}></lightning-button>
+                        <lightning-button label="Close" variant="neutral" onclick={handleCloseSessionModal}></lightning-button>
                     </footer>
                 </div>
             </section>
             <div class="slds-backdrop slds-backdrop_open"></div>
         </template>
-
     </lightning-card>
 </template>

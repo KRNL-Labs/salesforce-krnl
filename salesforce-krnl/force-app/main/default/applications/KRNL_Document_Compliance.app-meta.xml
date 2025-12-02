@@ -10,10 +10,9 @@
     <isNavAutoTempTabsDisabled>false</isNavAutoTempTabsDisabled>
     <isNavPersonalizationDisabled>false</isNavPersonalizationDisabled>
     <isNavTabPersistenceDisabled>false</isNavTabPersistenceDisabled>
-    <label>KRNL Document Compliance</label>
+    <label>AccessShield by KRNL</label>
     <navType>Standard</navType>
     <setupExperience>all</setupExperience>
-    <tabs>KRNL_Home</tabs>
     <tabs>Document_Compliance_Dashboard</tabs>
     <tabs>Document_Access_Log__c</tabs>
     <tabs>Blockchain_Document__c</tabs>

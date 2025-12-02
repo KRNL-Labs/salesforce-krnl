@@ -22,10 +22,24 @@ export default class DocumentAccessTracker extends LightningElement {
     @track selectedSessionDetails = null;
     @track isLoadingSessionDetails = false;
 
+    // Client-side pagination and search state
+    @track pagedUploads = [];
+    @track pagedAccessLogs = [];
+    @track uploadsSearchTerm = '';
+    @track accessLogsSearchTerm = '';
+
+    uploadsPage = 1;
+    accessLogsPage = 1;
+    uploadsPageSize = 10;
+    accessLogsPageSize = 10;
+
+    _uploadsFilteredCount = 0;
+    _accessLogsFilteredCount = 0;
+
     uploadColumns = [
-        { label: 'File Name', fieldName: 'fileName', type: 'text' },
-        { label: 'Hash', fieldName: 'documentHash', type: 'text' },
-        { label: 'Status', fieldName: 'blockchainStatus', type: 'text' },
+        { label: 'File Name', fieldName: 'fileName', type: 'text', cellAttributes: { alignment: 'center' } },
+        { label: 'Hash', fieldName: 'documentHash', type: 'text', cellAttributes: { alignment: 'center' } },
+        { label: 'Status', fieldName: 'blockchainStatus', type: 'text', cellAttributes: { alignment: 'center' } },
         {
             label: 'Uploaded At',
             fieldName: 'registrationTimestamp',
@@ -36,7 +50,8 @@ export default class DocumentAccessTracker extends LightningElement {
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit'
-            }
+            },
+            cellAttributes: { alignment: 'center' }
         },
         {
             type: 'button',
@@ -45,7 +60,8 @@ export default class DocumentAccessTracker extends LightningElement {
                 name: 'uploadAction',
                 variant: 'base',
                 disabled: { fieldName: 'isOpening' }
-            }
+            },
+            cellAttributes: { alignment: 'center' }
         }
     ];
 
@@ -62,11 +78,11 @@ export default class DocumentAccessTracker extends LightningElement {
                 hour: '2-digit',
                 minute: '2-digit'
             },
-            initialWidth: 180
+            cellAttributes: { alignment: 'center' }
         },
-        { label: 'File Name', fieldName: 'fileName', type: 'text', wrapText: true, initialWidth: 200 },
-        { label: 'Access Type', fieldName: 'accessType', type: 'text', initialWidth: 100 },
-        { label: 'User', fieldName: 'userName', type: 'text', initialWidth: 150 },
+        { label: 'File Name', fieldName: 'fileName', type: 'text', wrapText: true, cellAttributes: { alignment: 'center' } },
+        { label: 'Access Type', fieldName: 'accessType', type: 'text', cellAttributes: { alignment: 'center' } },
+        { label: 'User', fieldName: 'userName', type: 'text', cellAttributes: { alignment: 'center' } },
         {
             label: 'Session',
             fieldName: 'sessionId',
@@ -77,7 +93,7 @@ export default class DocumentAccessTracker extends LightningElement {
                 variant: 'base',
                 disabled: { fieldName: 'sessionButtonDisabled' }
             },
-            initialWidth: 260
+            cellAttributes: { alignment: 'center' }
         }
     ];
 
@@ -137,7 +153,10 @@ export default class DocumentAccessTracker extends LightningElement {
                 sessionButtonDisabled: !log.sessionId
             }));
 
+            this.refreshPagedAccessLogs();
+
             this.uploads = this.decorateUploads(uploads);
+            this.refreshPagedUploads();
         } catch (error) {
             // eslint-disable-next-line no-console
             console.error('Failed to initialize DocumentAccessTracker data', error);
@@ -301,6 +320,8 @@ export default class DocumentAccessTracker extends LightningElement {
                 actionLabel: isOpening ? 'Opening…' : (isRegistered ? 'View' : 'Register')
             };
         });
+
+        this.refreshPagedUploads();
     }
 
     renderViewerPlaceholder(win, fileName) {
@@ -324,6 +345,140 @@ export default class DocumentAccessTracker extends LightningElement {
 
     get hasUploadsForRecord() {
         return this.uploads && this.uploads.length > 0;
+    }
+
+    // Pagination + search helpers for uploads
+    refreshPagedUploads() {
+        const all = this.uploads || [];
+        const term = (this.uploadsSearchTerm || '').toLowerCase().trim();
+
+        let filtered = all;
+        if (term) {
+            filtered = all.filter((row) => {
+                const fileName = (row.fileName || '').toLowerCase();
+                const hash = (row.documentHash || '').toLowerCase();
+                const status = (row.blockchainStatus || '').toLowerCase();
+                return (
+                    fileName.includes(term) ||
+                    hash.includes(term) ||
+                    status.includes(term)
+                );
+            });
+        }
+
+        this._uploadsFilteredCount = filtered.length;
+
+        const totalPages = this.uploadsTotalPages;
+        if (this.uploadsPage > totalPages) {
+            this.uploadsPage = totalPages || 1;
+        }
+
+        const start = (this.uploadsPage - 1) * this.uploadsPageSize;
+        const end = start + this.uploadsPageSize;
+        this.pagedUploads = filtered.slice(start, end);
+    }
+
+    get uploadsTotalPages() {
+        if (!this._uploadsFilteredCount) {
+            return 1;
+        }
+        return Math.ceil(this._uploadsFilteredCount / this.uploadsPageSize);
+    }
+
+    get isUploadsPrevDisabled() {
+        return this.uploadsPage <= 1;
+    }
+
+    get isUploadsNextDisabled() {
+        return this.uploadsPage >= this.uploadsTotalPages;
+    }
+
+    handleUploadsSearchChange(event) {
+        this.uploadsSearchTerm = event.target.value;
+        this.uploadsPage = 1;
+        this.refreshPagedUploads();
+    }
+
+    handleUploadsPrevPage() {
+        if (this.uploadsPage > 1) {
+            this.uploadsPage -= 1;
+            this.refreshPagedUploads();
+        }
+    }
+
+    handleUploadsNextPage() {
+        if (this.uploadsPage < this.uploadsTotalPages) {
+            this.uploadsPage += 1;
+            this.refreshPagedUploads();
+        }
+    }
+
+    // Pagination + search helpers for access logs
+    refreshPagedAccessLogs() {
+        const all = this.accessLogs || [];
+        const term = (this.accessLogsSearchTerm || '').toLowerCase().trim();
+
+        let filtered = all;
+        if (term) {
+            filtered = all.filter((row) => {
+                const fileName = (row.fileName || '').toLowerCase();
+                const user = (row.userName || '').toLowerCase();
+                const type = (row.accessType || '').toLowerCase();
+                const session = (row.sessionId || '').toLowerCase();
+                return (
+                    fileName.includes(term) ||
+                    user.includes(term) ||
+                    type.includes(term) ||
+                    session.includes(term)
+                );
+            });
+        }
+
+        this._accessLogsFilteredCount = filtered.length;
+
+        const totalPages = this.accessLogsTotalPages;
+        if (this.accessLogsPage > totalPages) {
+            this.accessLogsPage = totalPages || 1;
+        }
+
+        const start = (this.accessLogsPage - 1) * this.accessLogsPageSize;
+        const end = start + this.accessLogsPageSize;
+        this.pagedAccessLogs = filtered.slice(start, end);
+    }
+
+    get accessLogsTotalPages() {
+        if (!this._accessLogsFilteredCount) {
+            return 1;
+        }
+        return Math.ceil(this._accessLogsFilteredCount / this.accessLogsPageSize);
+    }
+
+    get isAccessLogsPrevDisabled() {
+        return this.accessLogsPage <= 1;
+    }
+
+    get isAccessLogsNextDisabled() {
+        return this.accessLogsPage >= this.accessLogsTotalPages;
+    }
+
+    handleAccessLogsSearchChange(event) {
+        this.accessLogsSearchTerm = event.target.value;
+        this.accessLogsPage = 1;
+        this.refreshPagedAccessLogs();
+    }
+
+    handleAccessLogsPrevPage() {
+        if (this.accessLogsPage > 1) {
+            this.accessLogsPage -= 1;
+            this.refreshPagedAccessLogs();
+        }
+    }
+
+    handleAccessLogsNextPage() {
+        if (this.accessLogsPage < this.accessLogsTotalPages) {
+            this.accessLogsPage += 1;
+            this.refreshPagedAccessLogs();
+        }
     }
 
     async handleUploadRowAction(event) {
