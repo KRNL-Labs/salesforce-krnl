@@ -434,18 +434,17 @@ app.get('/api/view', async (req, res) => {
     let accessHash = tokenAccessHash || null;
 
     // For older tokens (or if claims are missing), fall back to KRNL
-    // in-memory sessions to resolve filePath/accessHash.
+    // session status (persisted in Supabase) to resolve filePath/accessHash.
     if (!filePath || !accessHash) {
       const KRNLService = require('./services/krnlService');
       const krnlService = new KRNLService();
 
-      let session;
       try {
         const statusResult = await krnlService.getWorkflowStatus(sessionId);
-        session = krnlService.sessions.get(sessionId);
 
-        const sessionFilePath = session && (session.documentPath || session.documentId || session.recordId);
-        const sessionAccessHash = (session && session.accessHash) || (statusResult && statusResult.accessHash) || null;
+        const sessionFilePath =
+          (statusResult && statusResult.documentId) || tokenDocumentPath || tokenDocumentId || tokenRecordId || null;
+        const sessionAccessHash = (statusResult && statusResult.accessHash) || null;
 
         if (!sessionFilePath || !sessionAccessHash) {
           return res.status(404).json({

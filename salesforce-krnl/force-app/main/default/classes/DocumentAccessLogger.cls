@@ -219,7 +219,7 @@ public with sharing class DocumentAccessLogger {
 
         try {
             Blockchain_Document__c blockchainDoc = [
-                SELECT Id, Document_ID__c, Document_Hash__c
+                SELECT Id, Document_ID__c, Document_Hash__c, File_Name__c
                 FROM Blockchain_Document__c
                 WHERE Id = :blockchainDocId
                 LIMIT 1
@@ -249,6 +249,7 @@ public with sharing class DocumentAccessLogger {
                 'clientIP' => clientIP,
                 'userAgent' => userAgent,
                 'documentId' => path,
+                'fileName' => blockchainDoc.File_Name__c,
                 'userEmail' => UserInfo.getUserEmail(),
                 'orgId' => UserInfo.getOrganizationId()
             };
@@ -266,7 +267,10 @@ public with sharing class DocumentAccessLogger {
                 }
 
                 // After successfully starting the access workflow, create a queued access log row
+                // Store only the sessionId - full details can be fetched from backend on-demand
                 try {
+                    String sessionId = body.containsKey('sessionId') ? (String)body.get('sessionId') : null;
+                    
                     Document_Access_Log__c accessLog = new Document_Access_Log__c(
                         Document_ID__c = blockchainDoc.Document_ID__c,
                         Document_Hash__c = blockchainDoc.Document_Hash__c,
@@ -275,8 +279,8 @@ public with sharing class DocumentAccessLogger {
                         Access_Timestamp__c = Datetime.now(),
                         IP_Address__c = clientIP,
                         User_Agent__c = userAgent,
-                        Status__c = 'Queued for Blockchain',
-                        Blockchain_Response__c = res.getBody()
+                        Status__c = 'Pending',
+                        Session_Id__c = sessionId
                     );
                     insert accessLog;
                 } catch (Exception logEx) {

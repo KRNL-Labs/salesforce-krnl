@@ -1,152 +1,20 @@
 const { logger } = require('../utils/logger');
+const crypto = require('crypto');
 const axios = require('axios');
 const { ethers } = require('ethers');
 const { buildTransactionIntent } = require('./intentBuilder');
 const { buildTransactionIntent4337 } = require('./eip4337IntentBuilder');
-const { saveSession, loadSession } = require('./sessionStore');
-
-// Shared sessions map across all KRNLService instances
-const SHARED_SESSIONS = new Map();
+const { saveSession, loadSession, saveAccessEventFromSession } = require('./sessionStore');
 
 class KRNLService {
   constructor() {
     this.nodeUrl = process.env.KRNL_NODE_URL || 'https://node.krnl.xyz';
     this.mockMode = process.env.MOCK_KRNL === 'true';
-    this.sessions = SHARED_SESSIONS; // Use shared session storage
 
     logger.info('KRNLService initialized', {
       nodeUrl: this.nodeUrl,
       mockMode: this.mockMode
     });
-  }
-
-  /**
-   * Update the corresponding Salesforce Document_Access_Log__c row when an
-   * access logging workflow has completed on-chain. This lets the LWC Access
-   * History table show a real accessHash and "Logged to Blockchain" status
-   * even for the session-first flow.
-   */
-  async _updateSalesforceAccessLog(session) {
-    if (!session) {
-      return;
-    }
-
-    if (session.salesforceUpdated) {
-      return;
-    }
-
-    const instanceUrl = process.env.SALESFORCE_INSTANCE_URL || session.salesforceInstanceUrl;
-    const accessToken = process.env.SALESFORCE_ACCESS_TOKEN || session.salesforceAccessToken;
-
-    if (!instanceUrl || !accessToken) {
-      logger.warn('SALESFORCE_INSTANCE_URL or SALESFORCE_ACCESS_TOKEN not configured; skipping access log update', {
-        hasInstanceUrl: !!instanceUrl,
-        hasAccessToken: !!accessToken
-      });
-      session.salesforceUpdated = true;
-      return;
-    }
-
-    let accessLogId = session.accessLogId || null;
-
-    // If we don't already know the access log Id, try to locate the most
-    // recent matching row by documentId/hash/userId/accessType.
-    if (!accessLogId) {
-      try {
-        const conditions = [];
-
-        if (session.recordId) {
-          conditions.push(`Document_ID__c='${session.recordId}'`);
-        }
-        if (session.documentHash) {
-          conditions.push(`Document_Hash__c='${session.documentHash}'`);
-        }
-        if (session.userId) {
-          conditions.push(`User_ID__c='${session.userId}'`);
-        }
-        if (session.accessType) {
-          conditions.push(`Access_Type__c='${session.accessType}'`);
-        }
-
-        if (conditions.length === 0) {
-          logger.warn('Insufficient data to locate Document_Access_Log__c; skipping update', {
-            sessionId: session.sessionId
-          });
-          session.salesforceUpdated = true;
-          return;
-        }
-
-        const soql = `SELECT Id FROM Document_Access_Log__c WHERE ${conditions.join(' AND ')} ORDER BY Access_Timestamp__c DESC LIMIT 1`;
-        const queryUrl = `${instanceUrl}/services/data/v65.0/query?q=${encodeURIComponent(soql)}`;
-
-        const queryResp = await axios.get(queryUrl, {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 30000
-        });
-
-        const records = (queryResp.data && queryResp.data.records) || [];
-        if (!records.length) {
-          logger.warn('No matching Document_Access_Log__c found to update', {
-            sessionId: session.sessionId,
-            soql
-          });
-          session.salesforceUpdated = true;
-          return;
-        }
-
-        accessLogId = records[0].Id;
-        session.accessLogId = accessLogId;
-      } catch (error) {
-        logger.error('Failed to locate Salesforce access log via SOQL', {
-          sessionId: session.sessionId,
-          error: error.message
-        });
-        session.salesforceUpdated = true;
-        return;
-      }
-    }
-
-    const body = {
-      Status__c: 'Logged to Blockchain',
-      Blockchain_Response__c: JSON.stringify({
-        source: 'krnl-session',
-        sessionId: session.sessionId,
-        documentHash: session.documentHash || null,
-        recordId: session.recordId || null,
-        documentId: session.documentId || null,
-        accessHash: session.accessHash || null,
-        txHash: session.txHash || null,
-        updatedAt: session.updatedAt || new Date().toISOString()
-      })
-    };
-
-    const url = `${instanceUrl}/services/data/v65.0/sobjects/Document_Access_Log__c/${encodeURIComponent(accessLogId)}`;
-
-    try {
-      const resp = await axios.patch(url, body, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
-      });
-
-      logger.info('Updated Salesforce Document_Access_Log__c from KRNL session', {
-        accessLogId,
-        status: resp.status
-      });
-      session.salesforceUpdated = true;
-    } catch (error) {
-      logger.error('Failed to update Salesforce access log from KRNL session', {
-        accessLogId,
-        error: error.message
-      });
-      session.salesforceUpdated = true;
-      throw error;
-    }
   }
 
   /**
@@ -188,7 +56,7 @@ class KRNLService {
    */
   async startComplianceWorkflow(params) {
     const { recordId, fileId, docHash, callbackUrl } = params;
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const sessionId = `session_${crypto.randomUUID()}`;
 
     logger.info(`Starting compliance workflow for record: ${recordId}, session: ${sessionId}`);
 
@@ -265,8 +133,6 @@ class KRNLService {
         }
       };
 
-      this.sessions.set(sessionId, session);
-
       try {
         await saveSession(session);
       } catch (e) {
@@ -302,6 +168,7 @@ class KRNLService {
       userAgent,
       recordId,
       documentId,
+      fileName,
       accessLogId,
       salesforceInstanceUrl,
       salesforceAccessToken
@@ -406,6 +273,21 @@ class KRNLService {
       }
 
       // Store session so callers can poll for completion / on-chain settlement via JSON-RPC
+      // Get current block number for efficient event polling
+      let startBlock = null;
+      try {
+        const rpcUrl = process.env.RPC_SEPOLIA_URL || process.env.RPC_URL;
+        if (rpcUrl) {
+          const provider = ethers.providers?.JsonRpcProvider
+            ? new ethers.providers.JsonRpcProvider(rpcUrl)
+            : new ethers.JsonRpcProvider(rpcUrl);
+          startBlock = await provider.getBlockNumber();
+          logger.info('Captured start block for event polling', { sessionId, startBlock });
+        }
+      } catch (e) {
+        logger.warn('Failed to get start block number', { error: e.message });
+      }
+
       const session = {
         sessionId,
         documentHash,
@@ -415,6 +297,7 @@ class KRNLService {
         recordId,
         userId,
         accessType,
+        fileName: fileName || null,
         clientIP,
         userAgent,
         accessLogId: accessLogId || null,
@@ -422,6 +305,7 @@ class KRNLService {
         salesforceAccessToken: salesforceAccessToken || process.env.SALESFORCE_ACCESS_TOKEN || null,
         status: 'RUNNING',
         startedAt: new Date().toISOString(),
+        startBlock: startBlock || null,
         intentId,
         useJsonRpc: true,
         debug: {
@@ -432,8 +316,6 @@ class KRNLService {
           pollingHistory: []
         }
       };
-
-      this.sessions.set(sessionId, session);
 
       try {
         await saveSession(session);
@@ -462,7 +344,7 @@ class KRNLService {
    */
   async startIntegrityWorkflow(params) {
     const { documentHash, documentId } = params;
-    const sessionId = `integrity_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const sessionId = `integrity_${crypto.randomUUID()}`;
 
     logger.info(`Starting integrity validation for document: ${documentHash}`);
 
@@ -522,7 +404,7 @@ class KRNLService {
     }
   }
 
-  async _pollKRNLWorkflowUntilComplete(sessionId, workflowId, timeoutMs = 30000, intervalMs = 2000) {
+  async _pollKRNLWorkflowUntilComplete(sessionId, workflowId, timeoutMs = 30000, intervalMs = 2000, session) {
     const startTime = Date.now();
     let lastStatus = null;
 
@@ -549,7 +431,6 @@ class KRNLService {
       });
 
       lastStatus = response;
-      const session = this.sessions.get(sessionId);
       if (session && session.debug && Array.isArray(session.debug.pollingHistory)) {
         session.debug.pollingHistory.push({
           timestamp: new Date().toISOString(),
@@ -693,10 +574,12 @@ class KRNLService {
    * Wait for the on-chain transaction to be mined and confirm a DocumentAccessLogged event.
    * This provides an additional assurance layer beyond KRNL SUCCESS code.
    */
-  async _waitForDocumentAccessLogged(txHash, documentHash) {
+  async _waitForDocumentAccessLogged(txHash, documentHash, userId = null, accessType = null, startBlock = null) {
     if (!txHash) {
       logger.warn('No txHash provided to _waitForDocumentAccessLogged; will rely solely on event logs', {
-        documentHash
+        documentHash,
+        userId,
+        accessType
       });
     }
 
@@ -716,7 +599,10 @@ class KRNLService {
     logger.info('Waiting for DocumentAccessLogged event', {
       txHash,
       documentHash,
-      contractAddress
+      userId,
+      accessType,
+      contractAddress,
+      startBlock
     });
 
     const provider = ethers.providers?.JsonRpcProvider
@@ -727,10 +613,19 @@ class KRNLService {
     // poll for the DocumentAccessLogged event around the current block and
     // derive the txHash from the event log itself.
 
-    // Search a wide window to ensure we catch the event even if it was emitted
-    // before we started polling. On testnets, blocks are fast, so go back further.
+    // Search from the block when the workflow started, or a narrow window if not available.
+    // This dramatically reduces the number of events we need to process.
     const currentBlock = await provider.getBlockNumber();
-    const fromBlock = Math.max(0, currentBlock - 10000); // ~30 min on fast testnets
+    let fromBlock;
+    if (startBlock && startBlock > 0) {
+      // Search from workflow start block (most efficient)
+      fromBlock = Math.max(0, startBlock - 10); // Small buffer for reorgs
+      logger.info('Using workflow start block for event search', { fromBlock, startBlock });
+    } else {
+      // Fallback: search last 500 blocks (~25 min on Sepolia, 8 min on faster chains)
+      fromBlock = Math.max(0, currentBlock - 500);
+      logger.warn('Start block not available, using 500 block window', { fromBlock, currentBlock });
+    }
 
     const iface = new ethers.utils.Interface(DOCUMENT_ACCESS_ABI);
     const eventTopic = iface.getEventTopic('DocumentAccessLogged');
@@ -751,25 +646,46 @@ class KRNLService {
         topics: [eventTopic]
       });
 
+      const latestBlock = await provider.getBlockNumber();
       logger.debug('Polled for DocumentAccessLogged events', {
         fromBlock,
-        currentBlock: await provider.getBlockNumber(),
+        toBlock: latestBlock,
+        blockRange: latestBlock - fromBlock,
         logsFound: logs.length,
         targetDocumentHash: documentHash
       });
+
+      // Update fromBlock for next iteration (like SDK does)
+      fromBlock = latestBlock;
 
       for (const log of logs) {
         try {
           const parsed = iface.parseLog(log);
           if (parsed && parsed.name === 'DocumentAccessLogged') {
             const loggedHash = parsed.args.documentHash;
+            const loggedUserId = parsed.args.salesforceUserId;
+            const loggedAccessType = parsed.args.accessType;
+            
             logger.debug('Found DocumentAccessLogged event', {
               loggedHash,
+              loggedUserId,
+              loggedAccessType,
               targetHash: documentHash,
+              targetUserId: userId,
+              targetAccessType: accessType,
               blockNumber: log.blockNumber,
               txHash: log.transactionHash
             });
-            if (!documentHash || loggedHash === documentHash) {
+            
+            // Match by documentHash AND userId AND accessType to uniquely identify this session's event.
+            // Since events are chronologically ordered and we search from our workflow's startBlock,
+            // the FIRST matching event is guaranteed to be ours. The on-chain accessHash (which includes
+            // block.timestamp) provides uniqueness - we just need to find the right event to extract it from.
+            const hashMatch = !documentHash || loggedHash === documentHash;
+            const userMatch = !userId || loggedUserId === userId;
+            const typeMatch = !accessType || loggedAccessType === accessType;
+            
+            if (hashMatch && userMatch && typeMatch) {
               const documentIdFromEvent = parsed.args.documentId;
               const accessHashFromEvent = parsed.args.accessHash;
 
@@ -777,10 +693,14 @@ class KRNLService {
                 txHashFromEvent: log.transactionHash,
                 blockNumber: log.blockNumber,
                 documentHash: loggedHash,
+                userId: loggedUserId,
+                accessType: loggedAccessType,
                 documentId: documentIdFromEvent,
-                accessHash: accessHashFromEvent
+                accessHash: accessHashFromEvent,
+                isFirstMatch: true
               });
 
+              // Return immediately - this is the earliest (and correct) matching event
               return {
                 eventConfirmed: true,
                 reason: 'ok',
@@ -806,26 +726,48 @@ class KRNLService {
   async getWorkflowStatus(sessionId) {
     logger.info(`Getting workflow status for session: ${sessionId}`);
 
-    let session = this.sessions.get(sessionId);
+    let session = await loadSession(sessionId);
+
     if (!session) {
-      // Attempt to lazily hydrate from Supabase-backed store when in-memory
-      // sessions have been lost (e.g. after a process restart).
-      try {
-        const persisted = await loadSession(sessionId);
-        if (persisted) {
-          this.sessions.set(sessionId, persisted);
-          session = persisted;
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    // If the session is already in a terminal state, avoid calling KRNL again.
+    // This covers both success (COMPLETED_WITH_EVENT) and error cases where
+    // the node has forgotten the intent (e.g. WORKFLOW_NOT_FOUND).
+    const terminalStates = [
+      'COMPLETED_WITH_EVENT',
+      'FAILED',
+      'INTENT_NOT_FOUND',
+      'WORKFLOW_NOT_FOUND',
+      'CANCELLED'
+    ];
+
+    if (terminalStates.includes(session.status)) {
+      // Ensure access event is persisted for terminal states (may already be done above)
+      // This covers edge cases where session was loaded from DB in a terminal state
+      if (session.accessHash || session.status === 'COMPLETED_WITH_EVENT') {
+        try {
+          await saveAccessEventFromSession(session);
+        } catch (e) {
+          logger.error('Failed to persist access event from terminal session', {
+            sessionId,
+            error: e.message
+          });
         }
-      } catch (e) {
-        logger.error('Failed to hydrate KRNL session from Supabase', {
-          sessionId,
-          error: e.message
-        });
       }
 
-      if (!session) {
-        throw new Error(`Session not found: ${sessionId}`);
-      }
+      return {
+        sessionId,
+        state: session.status,
+        result: session.result || null,
+        txHash: session.txHash || null,
+        documentId: session.documentId || null,
+        accessHash: session.accessHash || null,
+        timestamp: session.updatedAt || session.completedAt || new Date().toISOString(),
+        progress: session.progress || {},
+        debug: session.debug || null
+      };
     }
 
     if (this.mockMode) {
@@ -838,7 +780,7 @@ class KRNLService {
       if (session.useJsonRpc && session.intentId) {
         statusObj = await this._pollKRNLWorkflowStatusJsonRpc(session.intentId, undefined, undefined, session);
       } else {
-        statusObj = await this._pollKRNLWorkflowUntilComplete(sessionId, session.workflowId);
+        statusObj = await this._pollKRNLWorkflowUntilComplete(sessionId, session.workflowId, undefined, undefined, session);
       }
 
       // Update session with latest status from KRNL
@@ -854,7 +796,13 @@ class KRNLService {
       // txHash (and capture documentId/accessHash) from the event logs instead.
       // Only check for the event once - if we already have accessHash, skip this step.
       if (session.useJsonRpc && session.documentHash && session.status === 'COMPLETED' && !session.accessHash) {
-        const eventResult = await this._waitForDocumentAccessLogged(txHash, session.documentHash);
+        const eventResult = await this._waitForDocumentAccessLogged(
+          txHash,
+          session.documentHash,
+          session.userId,
+          session.accessType,
+          session.startBlock
+        );
         if (eventResult && eventResult.eventConfirmed) {
           session.status = 'COMPLETED_WITH_EVENT';
           if (eventResult.txHash) {
@@ -884,6 +832,24 @@ class KRNLService {
           sessionId,
           error: e.message
         });
+      }
+
+      // Write to krnl_access_events for LWC/Apex consumption when workflow completes
+      const completedStates = ['COMPLETED', 'COMPLETED_WITH_EVENT'];
+      if (completedStates.includes(session.status)) {
+        try {
+          await saveAccessEventFromSession(session);
+          logger.info('Access event recorded', {
+            sessionId,
+            status: session.status,
+            accessHash: session.accessHash ? session.accessHash.substring(0, 10) + '...' : null
+          });
+        } catch (e) {
+          logger.error('Failed to persist access event from completed workflow', {
+            sessionId,
+            error: e.message
+          });
+        }
       }
 
       return {
@@ -919,8 +885,6 @@ class KRNLService {
       workflowId: `mock_workflow_${sessionId}`
     };
 
-    this.sessions.set(sessionId, session);
-
     // Persist mock session so tests/dev flows can exercise persistence logic
     saveSession(session).catch((e) => {
       logger.error('Failed to persist mock compliance session', {
@@ -931,22 +895,24 @@ class KRNLService {
 
     // Simulate completion after delay
     setTimeout(() => {
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        session.status = 'COMPLETED';
-        session.result = {
-          complianceStatus: 'COMPLIANT',
-          riskScore: Math.floor(Math.random() * 30) + 10,
-          checks: [
-            { name: 'File Type Check', status: 'PASSED' },
-            { name: 'Content Scan', status: 'PASSED' },
-            { name: 'Signature Verification', status: 'PASSED' }
-          ]
-        };
-        session.txHash = `0x${Math.random().toString(16).substr(2, 64)}`;
-        session.completedAt = new Date().toISOString();
-        this.sessions.set(sessionId, session);
-      }
+      session.status = 'COMPLETED';
+      session.result = {
+        complianceStatus: 'COMPLIANT',
+        riskScore: Math.floor(Math.random() * 30) + 10,
+        checks: [
+          { name: 'File Type Check', status: 'PASSED' },
+          { name: 'Content Scan', status: 'PASSED' },
+          { name: 'Signature Verification', status: 'PASSED' }
+        ]
+      };
+      session.txHash = `0x${Math.random().toString(16).substr(2, 64)}`;
+      session.completedAt = new Date().toISOString();
+      saveSession(session).catch((e) => {
+        logger.error('Failed to persist completed mock compliance session', {
+          sessionId,
+          error: e.message
+        });
+      });
     }, 3000); // Complete after 3 seconds
 
     return {
@@ -972,8 +938,6 @@ class KRNLService {
       workflowId: `mock_access_${sessionId}`
     };
 
-    this.sessions.set(sessionId, session);
-
     saveSession(session).catch((e) => {
       logger.error('Failed to persist mock access session', {
         sessionId,
@@ -985,10 +949,6 @@ class KRNLService {
     const txHash = `0x${Math.random().toString(16).substr(2, 64)}`;
 
     setTimeout(() => {
-      const session = this.sessions.get(sessionId) || {
-        sessionId,
-        ...params
-      };
       session.status = 'COMPLETED';
       session.result = {
         accessLogged: true,
@@ -996,7 +956,12 @@ class KRNLService {
       };
       session.txHash = txHash;
       session.completedAt = new Date().toISOString();
-      this.sessions.set(sessionId, session);
+      saveSession(session).catch((e) => {
+        logger.error('Failed to persist completed mock access session', {
+          sessionId,
+          error: e.message
+        });
+      });
     }, 1000); // Complete after 1 second
 
     return {
@@ -1013,20 +978,36 @@ class KRNLService {
   _mockIntegrityWorkflow(sessionId, params) {
     logger.info(`Mock integrity workflow started: ${sessionId}`);
 
-    setTimeout(() => {
-      const session = {
+    const session = {
+      sessionId,
+      ...params,
+      status: 'RUNNING',
+      startedAt: new Date().toISOString(),
+      workflowId: `mock_integrity_${sessionId}`
+    };
+
+    saveSession(session).catch((e) => {
+      logger.error('Failed to persist mock integrity session', {
         sessionId,
-        ...params,
-        status: 'COMPLETED',
-        result: {
-          integrityStatus: Math.random() > 0.2 ? 'VALID' : 'TAMPERED',
-          hashMatch: Math.random() > 0.2,
-          confidenceScore: Math.floor(Math.random() * 20) + 80,
-          anomalies: Math.random() > 0.8 ? ['Timestamp mismatch'] : []
-        },
-        completedAt: new Date().toISOString()
+        error: e.message
+      });
+    });
+
+    setTimeout(() => {
+      session.status = 'COMPLETED';
+      session.result = {
+        integrityStatus: Math.random() > 0.2 ? 'VALID' : 'TAMPERED',
+        hashMatch: Math.random() > 0.2,
+        confidenceScore: Math.floor(Math.random() * 20) + 80,
+        anomalies: Math.random() > 0.8 ? ['Timestamp mismatch'] : []
       };
-      this.sessions.set(sessionId, session);
+      session.completedAt = new Date().toISOString();
+      saveSession(session).catch((e) => {
+        logger.error('Failed to persist completed mock integrity session', {
+          sessionId,
+          error: e.message
+        });
+      });
     }, 2000); // Complete after 2 seconds
 
     return {

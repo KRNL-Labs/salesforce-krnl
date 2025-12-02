@@ -59,6 +59,7 @@
                             columns={accessLogColumns}
                             hide-checkbox-column="true"
                             show-row-number-column="false"
+                            onrowaction={handleAccessLogRowAction}
                             class="slds-max-medium-table_stacked">
                         </lightning-datatable>
                     </template>
@@ -76,6 +77,66 @@
         <!-- Loading Spinner -->
         <template if:true={isProcessing}>
             <lightning-spinner alternative-text="Processing..." size="medium"></lightning-spinner>
+        </template>
+
+        <!-- Session Details Modal -->
+        <template if:true={showSessionModal}>
+            <section role="dialog" tabindex="-1" aria-modal="true" class="slds-modal slds-fade-in-open">
+                <div class="slds-modal__container">
+                    <header class="slds-modal__header">
+                        <h2 class="slds-text-heading_medium">Session Details</h2>
+                    </header>
+                    <div class="slds-modal__content slds-p-around_medium">
+                        <template if:true={isLoadingSessionDetails}>
+                            <lightning-spinner alternative-text="Loading session details" size="small"></lightning-spinner>
+                        </template>
+                        <template if:false={isLoadingSessionDetails}>
+                            <template if:true={selectedSessionDetails}>
+                                <dl class="slds-list_horizontal slds-wrap">
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Session ID">Session ID</dt>
+                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.sessionId}>{selectedSessionDetails.sessionId}</dd>
+
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="User">User</dt>
+                                    <dd class="slds-item_detail slds-truncate">
+                                        <template if:true={selectedSessionDetails.userIdUrl}>
+                                            <a href={selectedSessionDetails.userIdUrl} target="_blank">{selectedSessionDetails.userId}</a>
+                                        </template>
+                                        <template if:false={selectedSessionDetails.userIdUrl}>
+                                            {selectedSessionDetails.userId}
+                                        </template>
+                                    </dd>
+
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Status">Status</dt>
+                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.status}>{selectedSessionDetails.status}</dd>
+
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Access Hash">Access Hash</dt>
+                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.accessHash}>{selectedSessionDetails.accessHash}</dd>
+
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Transaction Hash">Transaction Hash</dt>
+                                    <dd class="slds-item_detail slds-truncate">
+                                        <template if:true={selectedSessionDetails.txHashUrl}>
+                                            <a href={selectedSessionDetails.txHashUrl} target="_blank" rel="noopener noreferrer">{selectedSessionDetails.txHash}</a>
+                                        </template>
+                                        <template if:false={selectedSessionDetails.txHashUrl}>
+                                            {selectedSessionDetails.txHash}
+                                        </template>
+                                    </dd>
+
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="File Name">File Name</dt>
+                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.fileName}>{selectedSessionDetails.fileName}</dd>
+
+                                    <dt class="slds-item_label slds-text-color_weak slds-truncate" title="Timestamp">Timestamp</dt>
+                                    <dd class="slds-item_detail slds-truncate" title={selectedSessionDetails.timestamp}>{selectedSessionDetails.timestamp}</dd>
+                                </dl>
+                            </template>
+                        </template>
+                    </div>
+                    <footer class="slds-modal__footer">
+                        <lightning-button label="Close" onclick={handleCloseSessionModal}></lightning-button>
+                    </footer>
+                </div>
+            </section>
+            <div class="slds-backdrop slds-backdrop_open"></div>
         </template>
 
     </lightning-card>

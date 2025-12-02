@@ -4,7 +4,7 @@ import getComplianceStats from '@salesforce/apex/DocumentAccessController.getCom
 import getRecentActivity from '@salesforce/apex/DocumentAccessController.getRecentActivity';
 import getUploadsForRecord from '@salesforce/apex/DocumentAccessController.getUploadsForRecord';
 import getDocumentAccessLogs from '@salesforce/apex/DocumentAccessController.getDocumentAccessLogs';
-import syncAccessLogsForRecord from '@salesforce/apex/DocumentAccessController.syncAccessLogsForRecord';
+import getSessionDetails from '@salesforce/apex/DocumentAccessController.getSessionDetails';
 import getViewerUrl from '@salesforce/apex/DocumentAccessLogger.getViewerUrl';
 import getWatermarkedViewerUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getWatermarkedViewerUrlForDirectUpload';
 import getViewerSessionUrlForDirectUpload from '@salesforce/apex/DocumentAccessLogger.getViewerSessionUrlForDirectUpload';
@@ -17,6 +17,10 @@ export default class DocumentAccessTracker extends LightningElement {
     @track complianceStats = {};
     @track isProcessing = false;
     @track uploads = [];
+    @track accessLogs = [];
+    @track showSessionModal = false;
+    @track selectedSessionDetails = null;
+    @track isLoadingSessionDetails = false;
 
     uploadColumns = [
         { label: 'File Name', fieldName: 'fileName', type: 'text' },
@@ -63,25 +67,17 @@ export default class DocumentAccessTracker extends LightningElement {
         { label: 'File Name', fieldName: 'fileName', type: 'text', wrapText: true, initialWidth: 200 },
         { label: 'Access Type', fieldName: 'accessType', type: 'text', initialWidth: 100 },
         { label: 'User', fieldName: 'userName', type: 'text', initialWidth: 150 },
-        { 
-            label: 'Access Hash', 
-            fieldName: 'accessHash', 
-            type: 'text',
-            wrapText: false,
-            cellAttributes: {
-                class: 'slds-truncate',
-                title: { fieldName: 'accessHash' }
-            },
-            initialWidth: 180
-        },
         {
-            label: 'Blockchain Status',
-            fieldName: 'blockchainStatus',
-            type: 'text',
-            cellAttributes: {
-                class: { fieldName: 'blockchainStatusClass' }
+            label: 'Session',
+            fieldName: 'sessionId',
+            type: 'button',
+            typeAttributes: {
+                label: { fieldName: 'sessionLabel' },
+                name: 'viewSession',
+                variant: 'base',
+                disabled: { fieldName: 'sessionButtonDisabled' }
             },
-            initialWidth: 150
+            initialWidth: 260
         }
     ];
 
@@ -103,10 +99,6 @@ export default class DocumentAccessTracker extends LightningElement {
 
             let rawAccessLogs = [];
             if (this.recordId) {
-                await syncAccessLogsForRecord({ recordId: this.recordId }).catch(error => {
-                    // eslint-disable-next-line no-console
-                    console.error('Failed to sync access logs for record', error);
-                });
                 rawAccessLogs = await getDocumentAccessLogs({ documentId: this.recordId }).catch(error => {
                     // eslint-disable-next-line no-console
                     console.error('Failed to load access logs for record', error);
@@ -140,7 +132,9 @@ export default class DocumentAccessTracker extends LightningElement {
                 blockchainStatus: log.blockchainStatus,
                 blockchainStatusClass: this.getBlockchainStatusClass(log.blockchainStatus),
                 fileName: log.fileName || '',
-                accessHash: log.accessHash || 'N/A'
+                sessionId: log.sessionId || null,
+                sessionLabel: log.sessionId || 'N/A',
+                sessionButtonDisabled: !log.sessionId
             }));
 
             this.uploads = this.decorateUploads(uploads);
@@ -444,6 +438,89 @@ export default class DocumentAccessTracker extends LightningElement {
                 this.isProcessing = false;
             }
         }
+    }
+
+    async handleAccessLogRowAction(event) {
+        const action = event.detail.action;
+        const row = event.detail.row;
+
+        if (!action || action.name !== 'viewSession' || !row) {
+            return;
+        }
+
+        const sessionId = row.sessionId;
+        if (!sessionId) {
+            return;
+        }
+
+        this.showSessionModal = true;
+        this.isLoadingSessionDetails = true;
+        this.selectedSessionDetails = null;
+
+        try {
+            const result = await getSessionDetails({ sessionId });
+            if (!result || !result.success) {
+                throw new Error('Failed to fetch session details');
+            }
+
+            // Transform status to user-friendly label
+            let statusLabel = result.status;
+            if (result.status === 'COMPLETED_WITH_EVENT') {
+                statusLabel = 'Logged on Blockchain';
+            }
+
+            // Create Etherscan Sepolia URL for transaction hash
+            const txHashUrl = result.txHash 
+                ? `https://sepolia.etherscan.io/tx/${result.txHash}` 
+                : null;
+
+            // Format timestamp to human-readable format
+            let formattedTimestamp = result.timestamp;
+            if (result.timestamp) {
+                try {
+                    const date = new Date(result.timestamp);
+                    formattedTimestamp = date.toLocaleString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: true
+                    });
+                } catch (e) {
+                    // Keep original if parsing fails
+                    formattedTimestamp = result.timestamp;
+                }
+            }
+
+            this.selectedSessionDetails = {
+                sessionId: result.sessionId,
+                userId: result.userId || 'Unknown',
+                userIdUrl: result.userId ? `/${result.userId}` : null,
+                status: statusLabel,
+                accessHash: result.accessHash || null,
+                txHash: result.txHash || null,
+                txHashUrl: txHashUrl,
+                fileName: result.fileName || 'Unknown',
+                timestamp: formattedTimestamp
+            };
+        } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error('Failed to load session details', error);
+            const message = error && error.body && error.body.message
+                ? error.body.message
+                : (error && error.message ? error.message : 'Failed to load session details');
+            this.showToast('Error', message, 'error');
+            this.showSessionModal = false;
+        } finally {
+            this.isLoadingSessionDetails = false;
+        }
+    }
+
+    handleCloseSessionModal() {
+        this.showSessionModal = false;
+        this.selectedSessionDetails = null;
     }
 
     showToast(title, message, variant) {

@@ -1,8 +1,9 @@
 const express = require('express');
+const crypto = require('crypto');
 const KRNLService = require('../services/krnlService');
 const { validateSalesforceToken } = require('../middleware/auth');
 const { logger } = require('../utils/logger');
-const { saveSession, loadSession } = require('../services/sessionStore');
+const { saveSession, loadSession, loadAccessEvent } = require('../services/sessionStore');
 
 const router = express.Router();
 const krnlService = new KRNLService();
@@ -54,7 +55,7 @@ router.post('/', validateSalesforceToken, async (req, res) => {
       });
     }
 
-    const sessionId = `access_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const sessionId = `access_${crypto.randomUUID()}`;
 
     logger.info('Logging document access', {
       documentHash,
@@ -142,8 +143,8 @@ router.post('/', validateSalesforceToken, async (req, res) => {
 
     // Align session expiry with viewer token expiry so Supabase can clean up
     // old sessions using the expiresAt field.
-    if (exp && krnlService.sessions && krnlService.sessions.get) {
-      const session = krnlService.sessions.get(sessionId);
+    if (exp) {
+      const session = await loadSession(sessionId);
       if (session) {
         session.expiresAt = new Date(exp * 1000).toISOString();
         await saveSession(session);
@@ -195,6 +196,7 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       clientIP,
       userAgent,
       documentId,
+      fileName,
       accessLogId
     } = req.body || {};
 
@@ -227,7 +229,7 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       });
     }
 
-    const sessionId = `access_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const sessionId = `access_${crypto.randomUUID()}`;
 
     logger.info('Initializing document access workflow', {
       documentHash,
@@ -248,6 +250,7 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
       clientIP: clientIP || req.ip,
       userAgent: userAgent || req.get('User-Agent'),
       documentId: finalDocumentId,
+      fileName: fileName || null,
       accessLogId,
       salesforceInstanceUrl,
       salesforceAccessToken
@@ -260,10 +263,21 @@ router.post('/init', validateSalesforceToken, async (req, res) => {
     });
 
     // Viewer will connect via SSE (/api/access/stream/:sessionId) to get real-time progress
-
-    // Use standalone viewer app URL (defaults to localhost for development)
-    const viewerAppUrl = process.env.VIEWER_APP_URL || 'http://localhost:5173';
-    const viewerSessionUrl = `${viewerAppUrl}?sessionId=${encodeURIComponent(sessionId)}`;
+    
+    // Use standalone viewer app URL (defaults to localhost for development).
+    // Ensure we always attach the *current* sessionId, even if VIEWER_APP_URL
+    // already contains query params or an old sessionId.
+    const rawViewerAppUrl = process.env.VIEWER_APP_URL || 'http://localhost:5173';
+    let viewerSessionUrl;
+    try {
+      const url = new URL(rawViewerAppUrl);
+      url.searchParams.set('sessionId', sessionId);
+      viewerSessionUrl = url.toString();
+    } catch (e) {
+      // Fallback for malformed VIEWER_APP_URL values that URL cannot parse
+      const separator = rawViewerAppUrl.includes('?') ? '&' : '?';
+      viewerSessionUrl = `${rawViewerAppUrl}${separator}sessionId=${encodeURIComponent(sessionId)}`;
+    }
 
     res.status(200).json({
       success: true,
@@ -352,7 +366,9 @@ router.get('/history/:documentHash', validateSalesforceToken, async (req, res) =
 
 /**
  * GET /api/access/session/:sessionId
- * Get access session details and status
+ * Get access session details and status.
+ * Reads from krnl_access_events table (lean access records for LWC/Apex).
+ * Falls back to live workflow status if event not yet recorded.
  */
 router.get('/session/:sessionId', validateSalesforceToken, async (req, res) => {
   try {
@@ -360,6 +376,33 @@ router.get('/session/:sessionId', validateSalesforceToken, async (req, res) => {
 
     logger.info('Access session status requested', { sessionId });
 
+    // Try to load from krnl_access_events first (for completed workflows)
+    const accessEvent = await loadAccessEvent(sessionId);
+
+    if (accessEvent) {
+      logger.info('Access event found in krnl_access_events', {
+        sessionId,
+        status: accessEvent.status,
+        hasAccessHash: !!accessEvent.access_hash
+      });
+
+      return res.json({
+        success: true,
+        sessionId,
+        status: accessEvent.status,
+        result: null, // Not stored in access events table
+        txHash: accessEvent.tx_hash,
+        documentId: accessEvent.document_id,
+        accessHash: accessEvent.access_hash,
+        userId: accessEvent.user_id,
+        fileName: accessEvent.file_name,
+        timestamp: accessEvent.updated_at || accessEvent.created_at,
+        progress: {} // Not stored in access events table
+      });
+    }
+
+    // Fall back to live workflow status for in-progress sessions
+    logger.info('Access event not found, checking live workflow status', { sessionId });
     const sessionStatus = await krnlService.getWorkflowStatus(sessionId);
 
     res.json({
@@ -370,6 +413,8 @@ router.get('/session/:sessionId', validateSalesforceToken, async (req, res) => {
       txHash: sessionStatus.txHash,
       documentId: sessionStatus.documentId,
       accessHash: sessionStatus.accessHash,
+      userId: sessionStatus.userId,
+      fileName: sessionStatus.fileName,
       timestamp: sessionStatus.timestamp,
       progress: sessionStatus.progress
     });
@@ -515,29 +560,15 @@ router.post('/token', async (req, res) => {
 
     logger.info('Viewer token requested', { sessionId });
 
-    // Try in-memory first
-    let session = krnlService.sessions && krnlService.sessions.get
-      ? krnlService.sessions.get(sessionId)
-      : null;
+    const session = await loadSession(sessionId);
 
-    // If not in memory, load from Supabase
-    if (!session) {
-      logger.info('Session not in memory, loading from Supabase', { sessionId });
-      session = await loadSession(sessionId);
-      
-      if (session) {
-        logger.info('Session loaded from Supabase', { 
-          sessionId,
-          status: session.status,
-          hasAccessHash: !!session.accessHash,
-          hasDocumentId: !!session.documentId
-        });
-        
-        // Put it back in memory for future requests
-        if (krnlService.sessions) {
-          krnlService.sessions.set(sessionId, session);
-        }
-      }
+    if (session) {
+      logger.info('Session loaded from Supabase', {
+        sessionId,
+        status: session.status,
+        hasAccessHash: !!session.accessHash,
+        hasDocumentId: !!session.documentId
+      });
     }
 
     if (!session) {

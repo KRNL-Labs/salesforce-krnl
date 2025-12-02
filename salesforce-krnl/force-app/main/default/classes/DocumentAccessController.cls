@@ -77,7 +77,7 @@ public with sharing class DocumentAccessController {
             List<Document_Access_Log__c> logs = [
                 SELECT Id, Name, Document_ID__c, Document_Hash__c, Access_Type__c,
                        User_ID__c, Access_Timestamp__c, IP_Address__c, User_Agent__c,
-                       Status__c, Blockchain_Response__c, Error_Message__c,
+                       Status__c, Session_Id__c, Blockchain_Response__c, Error_Message__c,
                        CreatedBy.Name
                 FROM Document_Access_Log__c
                 WHERE Document_ID__c = :documentId
@@ -118,22 +118,10 @@ public with sharing class DocumentAccessController {
                 wrapper.ipAddress = log.IP_Address__c;
                 wrapper.userAgent = log.User_Agent__c;
                 wrapper.status = log.Status__c;
-                wrapper.blockchainResponse = log.Blockchain_Response__c;
+                wrapper.sessionId = log.Session_Id__c;
                 wrapper.errorMessage = log.Error_Message__c;
                 wrapper.userName = log.CreatedBy.Name;
                 wrapper.blockchainStatus = getBlockchainStatusForLog(log);
-
-                // Parse accessHash from Blockchain_Response__c when present
-                if (String.isNotBlank(log.Blockchain_Response__c)) {
-                    try {
-                        Map<String, Object> response = (Map<String, Object>)JSON.deserializeUntyped(log.Blockchain_Response__c);
-                        if (response.containsKey('accessHash')) {
-                            wrapper.accessHash = (String)response.get('accessHash');
-                        }
-                    } catch (Exception e) {
-                        // Ignore parsing errors
-                    }
-                }
 
                 // Resolve fileName from related Blockchain_Document__c
                 Blockchain_Document__c doc = documentMap.get(log.Document_Hash__c);
@@ -162,107 +150,47 @@ public with sharing class DocumentAccessController {
         return logWrappers;
     }
 
-    @AuraEnabled
-    public static void syncAccessLogsForRecord(Id recordId) {
-        if (recordId == null) {
-            return;
-        }
-
-        List<Document_Access_Log__c> logs = [
-            SELECT Id, Status__c, Blockchain_Response__c
-            FROM Document_Access_Log__c
-            WHERE Document_ID__c = :recordId
-            AND Status__c = 'Queued for Blockchain'
-            LIMIT 20
-        ];
-
-        if (logs.isEmpty()) {
-            return;
-        }
-
-        for (Document_Access_Log__c log : logs) {
-            try {
-                syncSingleAccessLog(log);
-            } catch (Exception e) {
-                // Ignore per-log sync errors to avoid failing the whole transaction
-            }
-        }
-    }
-
-    private static void syncSingleAccessLog(Document_Access_Log__c log) {
-        if (log == null || String.isBlank(log.Blockchain_Response__c)) {
-            return;
-        }
-
-        String sessionId;
-        try {
-            Map<String, Object> existing = (Map<String, Object>)JSON.deserializeUntyped(log.Blockchain_Response__c);
-            if (existing != null && existing.containsKey('sessionId')) {
-                sessionId = (String)existing.get('sessionId');
-            }
-        } catch (Exception e) {
-            return;
-        }
-
+    /**
+     * @description Fetch full session details from backend for a given sessionId
+     * @param sessionId The KRNL session ID
+     * @return Map<String, Object> Session details including accessHash, txHash, status, etc.
+     */
+    @AuraEnabled(cacheable=false)
+    public static Map<String, Object> getSessionDetails(String sessionId) {
         if (String.isBlank(sessionId)) {
-            return;
+            throw new AuraHandledException('Session ID is required');
         }
 
-        HttpRequest req = new HttpRequest();
-        Http http = new Http();
-
-        String baseEndpoint = 'callout:krnl_blockchain_endpoint';
-        String encodedSessionId = EncodingUtil.urlEncode(sessionId, 'UTF-8');
-        req.setEndpoint(baseEndpoint + '/api/access/session/' + encodedSessionId);
-        req.setMethod('GET');
-        req.setHeader('Accept', 'application/json');
-        req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
-        req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
-        req.setTimeout(120000);
-
-        HTTPResponse res = http.send(req);
-        Integer status = res.getStatusCode();
-
-        if (status < 200 || status >= 300) {
-            return;
-        }
-
-        Map<String, Object> body;
         try {
-            body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+            HttpRequest req = new HttpRequest();
+            Http http = new Http();
+
+            String baseEndpoint = 'callout:krnl_blockchain_endpoint';
+            String encodedSessionId = EncodingUtil.urlEncode(sessionId, 'UTF-8');
+            req.setEndpoint(baseEndpoint + '/api/access/session/' + encodedSessionId);
+            req.setMethod('GET');
+            req.setHeader('Accept', 'application/json');
+            req.setHeader('X-Salesforce-Token', UserInfo.getSessionId());
+            req.setHeader('X-Salesforce-Instance-Url', URL.getOrgDomainUrl().toExternalForm());
+            req.setTimeout(120000);
+
+            HTTPResponse res = http.send(req);
+            Integer status = res.getStatusCode();
+
+            if (status < 200 || status >= 300) {
+                throw new AuraHandledException('Failed to fetch session details: ' + res.getBody());
+            }
+
+            Map<String, Object> body = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+            
+            if (body == null || !body.containsKey('success') || !(Boolean)body.get('success')) {
+                throw new AuraHandledException('Invalid response from backend');
+            }
+
+            return body;
         } catch (Exception e) {
-            return;
+            throw new AuraHandledException('Error fetching session details: ' + e.getMessage());
         }
-
-        if (body == null || !body.containsKey('success') || !(Boolean)body.get('success')) {
-            return;
-        }
-
-        String state = (String)body.get('status');
-        if (String.isBlank(state)) {
-            return;
-        }
-
-        if (state != 'COMPLETED' && state != 'COMPLETED_WITH_EVENT') {
-            return;
-        }
-
-        String accessHash;
-        if (body.containsKey('accessHash')) {
-            accessHash = (String)body.get('accessHash');
-        }
-
-        if (String.isBlank(accessHash)) {
-            return;
-        }
-
-        Document_Access_Log__c toUpdate = new Document_Access_Log__c(
-            Id = log.Id,
-            Status__c = 'Logged to Blockchain',
-            Blockchain_Response__c = res.getBody()
-        );
-
-        update toUpdate;
     }
 
     /**
@@ -548,18 +476,6 @@ public with sharing class DocumentAccessController {
                 wrapper.userName = log.CreatedBy.Name;
                 wrapper.blockchainStatus = getBlockchainStatusForLog(log);
 
-                // Parse accessHash from Blockchain_Response__c
-                if (String.isNotBlank(log.Blockchain_Response__c)) {
-                    try {
-                        Map<String, Object> response = (Map<String, Object>)JSON.deserializeUntyped(log.Blockchain_Response__c);
-                        if (response.containsKey('accessHash')) {
-                            wrapper.accessHash = (String)response.get('accessHash');
-                        }
-                    } catch (Exception e) {
-                        // Ignore parsing errors
-                    }
-                }
-
                 // Get fileName from Blockchain_Document__c, preferring File_Name__c
                 Blockchain_Document__c doc = documentMap.get(log.Document_Hash__c);
                 if (doc != null) {
@@ -630,12 +546,11 @@ public with sharing class DocumentAccessController {
         @AuraEnabled public String ipAddress { get; set; }
         @AuraEnabled public String userAgent { get; set; }
         @AuraEnabled public String status { get; set; }
-        @AuraEnabled public String blockchainResponse { get; set; }
+        @AuraEnabled public String sessionId { get; set; }
         @AuraEnabled public String errorMessage { get; set; }
         @AuraEnabled public String userName { get; set; }
         @AuraEnabled public String blockchainStatus { get; set; }
         @AuraEnabled public String fileName { get; set; }
-        @AuraEnabled public String accessHash { get; set; }
     }
 
     public class ComplianceStatsWrapper {
