@@ -1,5 +1,7 @@
 ## KRNL Secure Document Manager for Salesforce
 
+![Build Status](./diagram.png)
+
 Secure document uploads, personalized watermarking, and authenticity verification—right inside Salesforce.
 
 This Salesforce app—developed by KRNL Labs and powered by the KRNL Protocol—provides a secure and verifiable way to upload, share, and view sensitive documents directly inside Salesforce. Every viewer automatically receives a personalized, identity-bound watermark, ensuring full accountability and discouraging leaks, screenshots, or content theft. Even if a document is captured or exported, the watermark remains tied to the viewer's identity.
