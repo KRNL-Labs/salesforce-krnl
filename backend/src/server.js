@@ -241,7 +241,7 @@ app.put('/api/uploads/:uploadId/file', rawFileBody, async (req, res) => {
       contentType
     });
 
-    logger.info('Direct upload completed', {
+    logger.info('Direct upload completed, registering on blockchain', {
       uploadId,
       recordId,
       userId,
@@ -250,6 +250,51 @@ app.put('/api/uploads/:uploadId/file', rawFileBody, async (req, res) => {
       storage
     });
 
+    // Register document on blockchain before responding
+    let blockchainResult = null;
+    try {
+      blockchainResult = await registerDocumentDirect({
+        documentHash: hash,
+        salesforceRecordId: recordId,
+        metadata: JSON.stringify({
+          fileName,
+          uploadId,
+          userId,
+          orgId,
+          uploadedAt: new Date().toISOString()
+        })
+      });
+
+      logger.info('Blockchain registration completed during upload', {
+        uploadId,
+        recordId,
+        hash,
+        txHash: blockchainResult.txHash,
+        blockNumber: blockchainResult.blockNumber
+      });
+    } catch (blockchainError) {
+      logger.error('Blockchain registration failed during upload', {
+        uploadId,
+        recordId,
+        hash,
+        error: blockchainError.message
+      });
+      // Still return success for the upload, but include blockchain error
+      return res.json({
+        success: true,
+        uploadId,
+        recordId,
+        userId,
+        orgId,
+        hash,
+        storage,
+        blockchain: {
+          success: false,
+          error: blockchainError.message
+        }
+      });
+    }
+
     res.json({
       success: true,
       uploadId,
@@ -257,7 +302,13 @@ app.put('/api/uploads/:uploadId/file', rawFileBody, async (req, res) => {
       userId,
       orgId,
       hash,
-      storage
+      storage,
+      blockchain: {
+        success: true,
+        txHash: blockchainResult.txHash,
+        blockNumber: blockchainResult.blockNumber,
+        gasUsed: blockchainResult.gasUsed
+      }
     });
 
   } catch (error) {

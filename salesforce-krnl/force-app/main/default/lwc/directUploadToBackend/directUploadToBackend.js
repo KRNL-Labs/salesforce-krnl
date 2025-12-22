@@ -67,6 +67,11 @@ export default class DirectUploadToBackend extends LightningElement {
             this.storageBucket = data && data.storage ? data.storage.bucket : null;
             this.storagePath = data && data.storage ? data.storage.path : null;
 
+            // Extract blockchain info from upload response (backend now registers on-chain during upload)
+            const blockchainSuccess = data && data.blockchain && data.blockchain.success;
+            const txHash = blockchainSuccess ? data.blockchain.txHash : null;
+            const blockNumber = blockchainSuccess ? data.blockchain.blockNumber : null;
+
             // Persist upload metadata in Salesforce so we can show a per-record upload list later
             if (this.recordId && this.hash) {
                 try {
@@ -75,7 +80,9 @@ export default class DirectUploadToBackend extends LightningElement {
                         hash: this.hash,
                         storageBucket: this.storageBucket,
                         storagePath: this.storagePath,
-                        fileName: this.fileName
+                        fileName: this.fileName,
+                        txHash: txHash,
+                        blockNumber: blockNumber
                     });
                     this.uploadRecordId = docId;
                 } catch (metaError) {

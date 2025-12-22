@@ -530,6 +530,8 @@ public with sharing class DocumentAccessLogger {
      * @param storageBucket Supabase bucket name (optional)
      * @param storagePath Supabase path within the bucket (optional)
      * @param fileName Original file name as seen by the user (optional)
+     * @param txHash Blockchain transaction hash if already registered (optional)
+     * @param blockNumber Blockchain block number if already registered (optional)
      * @return Id of the created Blockchain_Document__c record
      */
     @AuraEnabled
@@ -538,7 +540,9 @@ public with sharing class DocumentAccessLogger {
         String hash,
         String storageBucket,
         String storagePath,
-        String fileName
+        String fileName,
+        String txHash,
+        Integer blockNumber
     ) {
         if (recordId == null) {
             throw new DocumentAccessException('recordId is required to record upload metadata');
@@ -558,19 +562,32 @@ public with sharing class DocumentAccessLogger {
             metadata.put('path', storagePath);
         }
 
+        // Determine status based on whether blockchain registration already happened
+        Boolean alreadyRegistered = !String.isBlank(txHash);
+        String status = alreadyRegistered ? 'Registered' : 'Pending';
+
         Blockchain_Document__c doc = new Blockchain_Document__c(
             Document_ID__c = recordId,
             Document_Hash__c = hash,
-            Blockchain_Status__c = 'Pending',
+            Blockchain_Status__c = status,
             Registration_Timestamp__c = Datetime.now(),
             File_Name__c = fileName,
             Metadata__c = metadata.isEmpty() ? null : JSON.serialize(metadata)
         );
 
+        // If already registered, store the blockchain response
+        if (alreadyRegistered) {
+            Map<String, Object> blockchainResponse = new Map<String, Object>{
+                'txHash' => txHash,
+                'blockNumber' => blockNumber
+            };
+            doc.Blockchain_Response__c = JSON.serialize(blockchainResponse);
+        }
+
         insert doc;
 
-        // Automatically queue blockchain registration after upload
-        if (Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
+        // Only queue blockchain registration if NOT already registered
+        if (!alreadyRegistered && Limits.getQueueableJobs() < Limits.getLimitQueueableJobs()) {
             System.enqueueJob(new DirectUploadRegistrar(
                 doc.Id,
                 hash,
